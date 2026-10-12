@@ -1,0 +1,47 @@
+:root {
+  --surface-paper: #FAF9F5; --surface-soft: #F5F0E8; --surface-muted: #EFE9DE;
+  --text-primary: #252523; --text-secondary: #55564E;
+  --accent-primary: #5C633F; --accent-pressed: #464D30; --accent-soft: #DFE3D2;
+  --border-subtle: #E6DFD8; --border-control: #797C6C;
+  --status-success: var(--accent-primary); --status-warning: #755419; --status-error: #923D32;
+  --surface-viewer: #181715; --text-on-dark: var(--surface-paper); --text-on-accent: var(--surface-paper);
+  --surface-overlay: var(--surface-paper); --text-overlay: var(--text-primary); --surface-overlay-backdrop: transparent;
+  --surface-reader-menu: color-mix(in srgb, var(--surface-paper) 50%, transparent);
+  --surface-reader-menu-hover: color-mix(in srgb, var(--surface-paper) 60%, transparent);
+  --surface-reader-menu-pressed: color-mix(in srgb, var(--surface-paper) 68%, transparent);
+  --font-body: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-display: "Noto Serif SC", "Songti SC", serif;
+  --font-cid: ui-monospace, "Cascadia Code", Consolas, monospace;
+  --type-display: 1.75rem; --type-heading: 1.25rem; --type-body: 1rem; --type-label: .875rem; --type-meta: .875rem;
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-6: 24px; --space-8: 32px; --space-12: 48px; --space-16: 64px;
+  --content-max: 1600px; --form-max: 800px; --measure-copy: 34rem;
+  --sidebar-width: 224px; --sidebar-drawer-width: min(320px, calc(100vw - var(--space-8)));
+  --preview-dual-min: 1100px; --preview-gap: var(--space-6); --thumbnail-ratio: 4 / 3;
+  --preview-stage-min: 320px; --preview-stage-max: 800px;
+  --gallery-copy-min: calc(var(--type-heading) * 1.5 + var(--space-2) + var(--type-body) * 1.75 * 3);
+  --radius-flat: 0; --radius-control: 4px; --radius-panel: 8px; --shadow-none: none;
+  --control-min: 44px; --control-height: 48px; --icon-size: 20px; --border-width: 1px; --focus-width: 2px; --focus-offset: 4px;
+  --layer-header: 10; --layer-popover: 20; --layer-sidebar: 30; --layer-viewer: 40;
+  --motion-micro: 120ms; --motion-panel: 180ms; --motion-reduced: 0ms; --ease-feedback: cubic-bezier(.2, 0, 0, 1);
+  --breakpoint-tablet: 768px; --breakpoint-desktop: 1024px; --breakpoint-wide: 1440px;
+  --reader-height-fallback: 100vh; --reader-height: 100dvh;
+  --reader-min-height: 0; --reader-min-width: 0; --reader-media-fit: contain; --reader-media-ratio: auto; --reader-media-inset: 0;
+  --safe-top: env(safe-area-inset-top, 0px); --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px); --safe-left: env(safe-area-inset-left, 0px);
+  --overlay-inset: var(--space-3); --overlay-padding: var(--space-4); --overlay-gap: var(--space-3);
+  --gallery-chrome-height: var(--control-height);
+  --overlay-top: calc(var(--safe-top) + var(--overlay-inset)); --overlay-right: calc(var(--safe-right) + var(--overlay-inset));
+  --overlay-bottom: calc(var(--safe-bottom) + var(--overlay-inset)); --overlay-left: calc(var(--safe-left) + var(--overlay-inset));
+  --overlay-max-height: calc(var(--reader-height) - var(--overlay-top) - var(--overlay-bottom)); --overlay-min-height: var(--control-min);
+  --overlay-panel-width: min(var(--form-max), calc(100vw - var(--overlay-left) - var(--overlay-right)));
+  --menu-width: min(320px, calc(100vw - var(--overlay-left) - var(--overlay-right))); --menu-row-min-height: var(--control-min); --menu-gap: var(--space-1);
+  --masonry-max-width: none; --masonry-edge: 0; --masonry-min-height: var(--reader-height);
+  --album-inset: var(--space-2); --album-column-3-min: 640px; --album-column-4-min: 960px; --album-column-5-min: 1280px;
+  --album-gap-small: var(--space-2); --album-gap-medium: var(--space-3); --album-gap-large: var(--space-4); --album-gap: var(--album-gap-small);
+  --album-fallback-ratio: 4 / 3; --masonry-media-ratio: auto; --masonry-tile-min-height: var(--control-min); --masonry-placeholder-min-height: calc(var(--space-12) * 2);
+  --layer-media: 0; --layer-chrome: 10; --layer-status: 20; --layer-overlay-backdrop: 30; --layer-overlay-panel: 40;
+}
+@supports not (height: 100dvh) { :root { --reader-height: var(--reader-height-fallback); } }
+@media (min-width: 768px) { :root { --overlay-inset: var(--space-4); --album-inset: var(--space-4); } }
+@media (min-width: 1024px) { :root { --type-display: 2.25rem; --album-inset: var(--space-6); } }
+@media (prefers-reduced-motion: reduce) { :root { --motion-micro: var(--motion-reduced); --motion-panel: var(--motion-reduced); } }

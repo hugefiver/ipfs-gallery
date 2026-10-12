@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.reader-album-build/
+coverage/
+test-results/
+playwright-report/
+audit-results/
+*.tsbuildinfo
+.env.local
+.env.*.local

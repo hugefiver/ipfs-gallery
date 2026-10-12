@@ -1,0 +1,111 @@
+import { test, expect } from './fixtures'
+import { sourceUrl } from './gateway-route'
+import { ui, openReaderTools, enterAlbum, enterReader, selectAlbumItem, expectReaderImage, expectImageBytes, expectDownloadBytes } from './gallery-ui'
+import { captureMediaLifecycle, mediaEvents } from './media-lifecycle'
+
+test('reader original, shared album thumbnail and verified download use one resident pool', async ({ page, galleryFixtures, network }) => {
+  await page.setViewportSize({ width: 1600, height: 900 })
+  await page.goto(sourceUrl('unixfs', galleryFixtures.thumbnailGallery.ref))
+  await expectReaderImage(page, galleryFixtures.raw.bytes)
+  const gets = () => [...network.slow.requests, ...network.fast.requests].filter(record => record.method === 'GET')
+  expect(gets().some(record => record.cid === galleryFixtures.thumbnail.cid)).toBe(false)
+  expect(gets().some(record => record.cid === galleryFixtures.dagPb.cid)).toBe(false)
+  await enterAlbum(page)
+  for (const title of ['第一原图', '第二原图']) await expectImageBytes(ui.tileImage(page, title), galleryFixtures.thumbnail.bytes)
+  expect(gets().filter(record => record.cid === galleryFixtures.thumbnail.cid)).toHaveLength(1)
+  await selectAlbumItem(page, '第二原图')
+  await expectReaderImage(page, galleryFixtures.dagPb.bytes)
+  await openReaderTools(page)
+  await expectDownloadBytes(page, ui.readerTools(page), galleryFixtures.dagPb.bytes)
+  await enterAlbum(page)
+  await selectAlbumItem(page, '第一原图')
+  await expectReaderImage(page, galleryFixtures.raw.bytes)
+  expect(gets().filter(record => [galleryFixtures.raw.cid, galleryFixtures.dagPb.cid].includes(record.cid!))).toHaveLength(2)
+  expect(network.bridge.routes.filter(route => new URL(route.url).pathname.endsWith(`/${galleryFixtures.thumbnailGallery.ref.cid}`))).toHaveLength(1)
+})
+
+test('leaving album cancels its delayed consumers and hidden modes start no extra media reads', async ({ page, galleryFixtures, network }) => {
+  await page.setViewportSize({ width: 375, height: 812 })
+  for (const gateway of [network.slow, network.fast]) gateway.setBlockMode(galleryFixtures.thumbnail.cid, { kind: 'delay', milliseconds: 2000 })
+  const thumbnailRequests = () => [...network.slow.requests, ...network.fast.requests].filter(record => record.method === 'GET' && record.cid === galleryFixtures.thumbnail.cid)
+  await page.goto(sourceUrl('unixfs', galleryFixtures.thumbnailGallery.ref))
+  await expectReaderImage(page, galleryFixtures.raw.bytes)
+  expect(thumbnailRequests()).toEqual([])
+  await enterAlbum(page)
+  await expect.poll(() => thumbnailRequests().length).toBe(1)
+  const pending = thumbnailRequests()[0]!
+  await enterReader(page)
+  await expectReaderImage(page, galleryFixtures.raw.bytes)
+  await expect.poll(() => pending.completedAt).toBeDefined()
+  expect(pending.aborted).toBe(true)
+  await page.mouse.wheel(0, 2000)
+  await page.waitForTimeout(350)
+  expect(thumbnailRequests()).toHaveLength(1)
+})
+
+test('corrupt shared thumbnail falls back to each verified original without repeated decoding or retries', async ({ page, galleryFixtures, network }) => {
+  await captureMediaLifecycle(page)
+  network.slow.setBlockMode(galleryFixtures.thumbnail.cid, { kind: 'corrupt' })
+  network.fast.setBlockMode(galleryFixtures.thumbnail.cid, { kind: '404' })
+  await page.goto(sourceUrl('unixfs', galleryFixtures.thumbnailGallery.ref))
+  await expectReaderImage(page, galleryFixtures.raw.bytes)
+  await enterAlbum(page)
+  for (const [title, bytes] of [['第一原图', galleryFixtures.raw.bytes], ['第二原图', galleryFixtures.dagPb.bytes]] as const) await expectImageBytes(ui.tileImage(page, title), bytes)
+  expect(network.slow.requests.some(record => record.cid === galleryFixtures.thumbnail.cid && record.status === 200)).toBe(true)
+  expect(network.fast.requests.some(record => record.cid === galleryFixtures.thumbnail.cid && record.status === 404)).toBe(true)
+  const attempts = () => [...network.slow.requests, ...network.fast.requests].filter(record => record.cid === galleryFixtures.thumbnail.cid).length
+  const settled = attempts()
+  expect(settled).toBe(2)
+  const originalReads = () => [...network.slow.requests, ...network.fast.requests].filter(record => record.method === 'GET' && [galleryFixtures.raw.cid, galleryFixtures.dagPb.cid].includes(record.cid!))
+  expect(originalReads()).toHaveLength(2)
+  const decoded = await mediaEvents(page)
+  expect(decoded.filter(event => event.type === 'load')).toHaveLength(3)
+  await page.waitForTimeout(350)
+  expect(attempts()).toBe(settled)
+  expect(await mediaEvents(page)).toEqual(decoded)
+  await selectAlbumItem(page, '第二原图')
+  await expectReaderImage(page, galleryFixtures.dagPb.bytes)
+  expect(originalReads()).toHaveLength(2)
+})
+
+test('album reads only visible thumbnails and keyboard focus reveals a distant tile', async ({ page, previewFixtures, network }) => {
+  await page.setViewportSize({ width: 375, height: 480 })
+  const first = previewFixtures.items[0]!
+  await page.goto(sourceUrl('meta', previewFixtures.manifest.ref))
+  await expectReaderImage(page, first.original.bytes)
+  const thumbnailCids = new Set(previewFixtures.items.map(item => item.thumbnail.cid))
+  const thumbnailReads = () => network.bridge.routes.filter(route => thumbnailCids.has(new URL(route.url).pathname.split('/').at(-1)!))
+  expect(thumbnailReads()).toEqual([])
+  await enterAlbum(page)
+  await expectImageBytes(ui.tileImage(page, first.title), first.thumbnail.bytes)
+  expect(thumbnailReads().length).toBeLessThan(previewFixtures.items.length)
+  const last = previewFixtures.items.at(-1)!
+  await ui.tile(page, last.title).focus()
+  await expectImageBytes(ui.tileImage(page, last.title), last.thumbnail.bytes)
+  expect(await ui.album(page).evaluate(element => element.scrollTop)).toBeGreaterThan(0)
+  await expect(ui.tile(page, last.title)).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expectReaderImage(page, last.original.bytes)
+  await expect(ui.reader(page)).toBeFocused()
+  await expect(ui.menuButton(page)).toBeVisible()
+})
+
+test('leaving a pending reader aborts only its consumer and admits album thumbnails before the next reader original', async ({ page, previewFixtures, network }) => {
+  const first = previewFixtures.items[0]!
+  const second = previewFixtures.items[1]!
+  for (const gateway of [network.slow, network.fast]) gateway.setBlockMode(first.original.cid, { kind: 'delay', milliseconds: 2000 })
+  await page.goto(sourceUrl('meta', previewFixtures.manifest.ref))
+  await expect(ui.reader(page)).toBeVisible()
+  const originalRequests = () => [...network.slow.requests, ...network.fast.requests].filter(request => request.method === 'GET' && request.cid === first.original.cid)
+  await expect.poll(() => originalRequests().length).toBe(1)
+  const pending = originalRequests()[0]!
+  await enterAlbum(page)
+  await expectImageBytes(ui.tileImage(page, first.title), first.thumbnail.bytes)
+  await expect.poll(() => pending.completedAt).toBeDefined()
+  expect(pending.aborted).toBe(true)
+  await selectAlbumItem(page, second.title)
+  await expectReaderImage(page, second.original.bytes)
+  expect(new URL(page.url()).searchParams.get('item')).toBe(second.id)
+  expect(originalRequests()).toHaveLength(1)
+  expect(network.bridge.routes.filter(route => new URL(route.url).pathname.endsWith(`/${previewFixtures.manifest.cid}`))).toHaveLength(1)
+})
