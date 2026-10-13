@@ -17,6 +17,43 @@ interface AlbumTileProps extends MediaContext {
   onFocusItem: (id: string) => void
 }
 
+type ObserverRegistry = {
+  observer: IntersectionObserver
+  callbacks: Map<Element, (intersecting: boolean) => void>
+}
+const containerObservers = new WeakMap<Element, ObserverRegistry>()
+
+function observeIntersection(
+  container: Element,
+  element: Element,
+  callback: (intersecting: boolean) => void,
+): () => void {
+  let registry = containerObservers.get(container)
+  if (!registry) {
+    const callbacks = new Map<Element, (intersecting: boolean) => void>()
+    const observer = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        const handler = callbacks.get(entry.target)
+        if (handler) handler(entry.isIntersecting)
+      }
+    }, { root: container, rootMargin: '0px' })
+    registry = { observer, callbacks }
+    containerObservers.set(container, registry)
+  }
+  registry.callbacks.set(element, callback)
+  registry.observer.observe(element)
+  return () => {
+    const current = containerObservers.get(container)
+    if (!current) return
+    current.callbacks.delete(element)
+    current.observer.unobserve(element)
+    if (current.callbacks.size === 0) {
+      current.observer.disconnect()
+      containerObservers.delete(container)
+    }
+  }
+}
+
 function AlbumPreview({ item, service, sessionId, visible, onRatio, onVideo }: MediaContext & {
   item: GalleryItem
   visible: boolean
@@ -96,12 +133,7 @@ export const AlbumTile = memo(function AlbumTile({
     const container = scrollRoot.current
     if (!element || !container) return
     if (typeof IntersectionObserver !== 'undefined') {
-      let observing = true
-      const observer = new IntersectionObserver(entries => {
-        if (observing) setVisible(!!entries[0]?.isIntersecting)
-      }, { root: container, rootMargin: '0px' })
-      observer.observe(element)
-      return () => { observing = false; observer.disconnect() }
+      return observeIntersection(container, element, setVisible)
     }
     const measure = () => {
       const bounds = container.getBoundingClientRect()

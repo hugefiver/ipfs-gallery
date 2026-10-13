@@ -51,7 +51,7 @@ export function SourceForm({ location, loading, compact, expanded, inputError, o
       <Action type="submit" variant="contained" disabled={duplicatePending} endIcon={<ArrowRightIcon aria-hidden="true" />}>{duplicatePending ? '正在读取' : '打开'}</Action>
       {loading && <Action onClick={onCancel}>取消</Action>}
     </div>
-    <p id="source-help" className="help">{mode === 'cids' ? '每行一个 CID 或 IPFS 地址（也可用英文逗号分隔）；路径含逗号时请通过重复 cid 查询参数打开。' : mode === 'manifest' ? '打开经过验证的 JSON、YAML 或 TOML 图库描述文件。' : '粘贴 CID、ipfs:// 地址或 IPFS 网关链接。'} 来源链接的主机不会自动加入网关。</p>
+    <p id="source-help" className="help">{mode === 'cids' ? '每行输入一个 CID 或 IPFS 链接，也可用逗号分隔。' : mode === 'manifest' ? '支持 JSON、YAML、TOML 格式的图库描述文件。' : '支持粘贴 CID、ipfs:// 链接或公共网关 URL。'}</p>
     {visibleError && <p id="source-error" className="error-text" role="alert">{visibleError}</p>}
     </form>}
   </div>

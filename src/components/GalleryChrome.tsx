@@ -1,10 +1,10 @@
-import { ListIcon, XIcon } from '@phosphor-icons/react'
+import { ListIcon } from '@phosphor-icons/react'
 import { useLayoutEffect, useRef } from 'react'
 import type { GalleryMode } from '../app/readerAlbumTypes'
 import { Action } from './Primitives'
 import { READER_GESTURE_THRESHOLDS } from '../hooks/readerInteraction'
 
-export function GalleryChrome({ mode, menuOpen, onMenu, onHide }: { mode: GalleryMode; menuOpen: boolean; onMenu: () => void; onHide: () => void }) {
+export function GalleryChrome({ mode, menuOpen, onMenu }: { mode: GalleryMode; menuOpen: boolean; onMenu: () => void; onHide: () => void }) {
   const chrome = useRef<HTMLElement>(null)
   const trigger = useRef<HTMLButtonElement>(null)
   const menuAction = useRef(onMenu)
@@ -62,7 +62,6 @@ export function GalleryChrome({ mode, menuOpen, onMenu, onHide }: { mode: Galler
   }, [mode])
   if (mode === 'reader') return <Action ref={trigger} className="reader-menu-trigger" data-menu-trigger aria-label="菜单" aria-haspopup="dialog" aria-expanded={menuOpen} aria-controls="gallery-panel" onClick={onMenu}><ListIcon aria-hidden="true" /></Action>
   return <nav ref={chrome} className="gallery-chrome" aria-label="相册工具" data-gallery-chrome>
-    <Action data-menu-trigger aria-haspopup="dialog" aria-expanded={menuOpen} aria-controls="gallery-panel" onClick={onMenu} startIcon={<ListIcon aria-hidden="true" />}>菜单</Action>
-    <Action aria-label="隐藏工具" onClick={onHide}><XIcon aria-hidden="true" /></Action>
+    <Action ref={trigger} className="reader-menu-trigger" data-menu-trigger aria-label="菜单" aria-haspopup="dialog" aria-expanded={menuOpen} aria-controls="gallery-panel" onClick={onMenu}><ListIcon aria-hidden="true" /></Action>
   </nav>
 }

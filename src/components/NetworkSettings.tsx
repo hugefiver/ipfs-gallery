@@ -63,19 +63,19 @@ export function NetworkSettings({ open, location, stats, preferences, effectiveG
   }
   const storageError = preferences.storageStatus !== 'disabled' && preferences.storageStatus !== 'saved'
   return <div className="network-settings">
-    <p id="gateway-help">仅向当前实际启用的网关发送请求，自动负载均衡与失败回退。下方编辑需点应用，才会更新本地网关偏好并重新读取当前来源。</p>
-    {location.gateways.length > 0 && <p className="help">当前网关来自分享地址，优先于本地偏好。开启保存或清除设置不会覆盖此地址；只有明确应用网关才会将编辑值设为本地偏好。</p>}
+    <p id="gateway-help">请求将在勾选的网关间自动分发与重试。修改后点击“应用”生效。</p>
+    {location.gateways.length > 0 && <p className="help">当前使用链接指定的网关。</p>}
     <div className="gateway-editor">{rows.map((row, index) => <div className="gateway-row" key={row.id}>
-      <label className="gateway-enable"><input type="checkbox" checked={row.enabled} aria-label={`启用网关 ${index + 1}`} onChange={event => setDraft(previous => ({ ...previous, rows: previous.rows.map(value => value.id === row.id ? { ...value, enabled: event.target.checked } : value) }))} />启用</label>
+      <label className="gateway-enable"><input type="checkbox" checked={row.enabled} aria-label={`启用网关 ${index + 1}`} onChange={event => setDraft(previous => ({ ...previous, rows: previous.rows.map(value => value.id === row.id ? { ...value, enabled: event.target.checked } : value) }))} /></label>
       <label className="gateway-url"><span className="sr-only">网关 {index + 1} HTTPS 地址</span><input type="url" value={row.url} placeholder="HTTPS 网关基地址" spellCheck={false} maxLength={4096} aria-invalid={!!error && row.enabled} aria-describedby={`gateway-help${error ? ' gateway-error' : ''}`} onChange={event => { setApplied(false); setError(''); setDraft(previous => ({ ...previous, rows: previous.rows.map(value => value.id === row.id ? { ...value, url: event.target.value } : value) })) }} /></label>
       <Action aria-label={`移除网关 ${index + 1}`} onClick={() => setDraft(previous => ({ ...previous, rows: previous.rows.filter(value => value.id !== row.id) }))}><XIcon aria-hidden="true" /></Action>
     </div>)}</div>
     <div className="actions"><Action disabled={rows.length >= DEFAULT_LIMITS.maxGateways} startIcon={<PlusIcon aria-hidden="true" />} onClick={() => setDraft(previous => ({ ...previous, rows: [...previous.rows, { id: previous.nextId, url: '', enabled: true }], nextId: previous.nextId + 1 }))}>添加网关</Action><Action startIcon={<ArrowCounterClockwiseIcon aria-hidden="true" />} onClick={() => apply(true)}>恢复默认并应用</Action></div>
     {error && <p id="gateway-error" className="error-text" role="alert">{error}</p>}
-    {applied && <p role="status">网关已在本次访问中应用；浏览器保存结果见下方。</p>}
-    <section aria-labelledby="preferences-title"><h3 id="preferences-title">此浏览器的偏好</h3>
+    {applied && <p role="status">已在本次会话中应用网关。</p>}
+    <section aria-labelledby="preferences-title"><h3 id="preferences-title">本地偏好</h3>
       <label className="gateway-enable"><input type="checkbox" checked={preferences.remember} aria-describedby="preferences-help preferences-storage-status" onChange={event => preferences.setRemember(event.target.checked)} />保存设置到此浏览器</label>
-      <p id="preferences-help" className="help">仅保存已有布局、桌面／手机侧栏和已应用的本地网关偏好，不保存来源、筛选、媒体或统计。布局与侧栏值保留，但不控制当前单幅阅读器、相册或工具显隐。保存开关与清除立即生效；取消仅放弃尚未应用的网关草稿。</p>
+      <p id="preferences-help" className="help">仅保存在本地存储中，不会上传任何浏览数据。</p>
       <p id="preferences-storage-status" className={storageError ? 'error-text' : 'help'} role={storageError ? 'alert' : 'status'}>{preferences.storageMessage ?? storageLabels[preferences.storageStatus]}</p>
       <div className="actions">
         {preferences.remember && storageError && <Action onClick={() => preferences.setRemember(true)}>重试保存当前本地偏好</Action>}
@@ -83,15 +83,15 @@ export function NetworkSettings({ open, location, stats, preferences, effectiveG
         <Action onClick={() => preferences.clearSavedPreferences()}>清除已保存设置并恢复默认</Action>
       </div>
     </section>
-    <section><h3>当前来源的请求统计</h3><p className="help">仅代表本次浏览器请求；“未检查”不等于不可用，成功不代表 IPFS 全网在线。</p>
+    <section><h3>网关连接状态</h3><p className="help">统计本次会话的请求响应情况。</p>
       <ul className="gateway-stats">{effectiveGateways.map(url => {
         const stat = stats.find(value => value.url === url)
         const measured = stat && stat.successes + stat.failures > 0
-        const status = !stat || !measured ? (stat?.inFlight ? '检查中' : '未检查') : stat.state === 'cooldown' ? '暂时冷却' : stat.state === 'probing' ? '恢复检查中' : stat.successes ? '本次请求可用' : '无法确认'
-        return <li key={url}><strong className="cid">{url}</strong><span>{status}</span>{stat && <span>成功 {stat.successes} · 失败 {stat.failures} · 在途 {stat.inFlight}{stat.ewmaMs === undefined ? '' : ` · 平均响应 ${Math.round(stat.ewmaMs)} ms`}{stat.cooldownUntil ? ` · 冷却至 ${new Date(stat.cooldownUntil).toLocaleTimeString('zh-CN')}` : ''}</span>}</li>
+        const status = !stat || !measured ? (stat?.inFlight ? '检测中' : '未检测') : stat.state === 'cooldown' ? '暂时冷却' : stat.state === 'probing' ? '恢复中' : stat.successes ? '正常可用' : '响应失败'
+        return <li key={url}><strong className="cid">{url}</strong><span>{status}</span>{stat && <span>成功 {stat.successes} · 失败 {stat.failures} · 在途 {stat.inFlight}{stat.ewmaMs === undefined ? '' : ` · 延迟 ${Math.round(stat.ewmaMs)} ms`}</span>}</li>
       })}</ul>
     </section>
-    <section className="privacy-note"><h3>隐私与资源边界</h3><p>网关可看到请求的 CID、IP 地址与时间。完整性验证不等于保密或媒体安全审核。不发送分析，不保存媒体或 CID 历史；分享地址仍包含当前来源。</p><p>仅允许公共 HTTPS 网关；浏览器无法保证域名 DNS 不映射到私网。来源中的文本不会作为 HTML 执行。</p><p>单媒体最多 {DEFAULT_LIMITS.maxAssetBytes / 1024 / 1024} MiB，Blob 缓存 {DEFAULT_LIMITS.maxBlobCacheBytes / 1024 / 1024} MiB，同时最多 {DEFAULT_LIMITS.maxAssetConcurrency} 个媒体任务。单网关超时 {DEFAULT_LIMITS.gatewayTimeoutMs / 1000} 秒，来源超时 {DEFAULT_LIMITS.discoveryTimeoutMs / 1000} 秒，媒体超时 {DEFAULT_LIMITS.assetTimeoutMs / 1000} 秒。视频完整验证后才可播放。</p></section>
+    <div className="privacy-note"><p>所有影像均在浏览器端进行内容哈希校验，仅通过 HTTPS 安全网关传输。</p></div>
     <footer className="actions"><Action variant="contained" onClick={() => apply()}>应用并重新读取</Action><Action onClick={close}>取消</Action></footer>
   </div>
 }

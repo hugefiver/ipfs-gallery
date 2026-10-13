@@ -19,6 +19,7 @@ function ReaderSession({ item, items, asset: binding, service, sessionId, toolsH
   const stage = useRef<HTMLElement>(null)
   const image = useRef<HTMLImageElement>(null)
   const currentTransform = useRef<ReaderTransform>(fitted)
+  const activeBox = useRef<{ left: number; top: number; width: number; height: number } | null>(null)
   const downloadScope = useRef<ReaderDownloadScope | null>(null)
   const tools = useRef<HTMLDivElement>(null)
   const [transform, setTransform] = useState<ReaderTransform>(fitted)
@@ -41,7 +42,7 @@ function ReaderSession({ item, items, asset: binding, service, sessionId, toolsH
   useLayoutEffect(() => {
     const scope = new ReaderDownloadScope(service, item, setNotice, setDownloading)
     downloadScope.current = scope
-    const cancelGesture = () => gestures.cancel()
+    const cancelGesture = () => { activeBox.current = null; gestures.cancel() }
     window.addEventListener('blur', cancelGesture)
     return () => {
       window.removeEventListener('blur', cancelGesture)
@@ -53,6 +54,7 @@ function ReaderSession({ item, items, asset: binding, service, sessionId, toolsH
 
   useLayoutEffect(() => {
     if (modalOpen) {
+      activeBox.current = null
       gestures.cancel()
     }
   }, [modalOpen, gestures])
@@ -85,15 +87,21 @@ function ReaderSession({ item, items, asset: binding, service, sessionId, toolsH
     if (!viewport) return
     const sides = ['top', 'right', 'bottom', 'left'] as const
     const previous = sides.map(side => root.style.getPropertyValue(`--overlay-${side}`))
+    let rafId = 0
+    let customModified = false
     // Native pinch moves the visible viewport without resizing fixed media.
-    const positionTools = () => {
+    const updatePosition = () => {
+      rafId = 0
       if (viewport.scale <= 1) {
+        if (!customModified) return
+        customModified = false
         sides.forEach((side, index) => {
           if (previous[index]) root.style.setProperty(`--overlay-${side}`, previous[index])
           else root.style.removeProperty(`--overlay-${side}`)
         })
         return
       }
+      customModified = true
       const zoom = Number(getComputedStyle(document.documentElement).zoom) || 1
       const offsets = {
         top: viewport.offsetTop,
@@ -103,21 +111,27 @@ function ReaderSession({ item, items, asset: binding, service, sessionId, toolsH
       }
       for (const side of sides) root.style.setProperty(`--overlay-${side}`, `calc(var(--safe-${side}) + var(--overlay-inset) + ${offsets[side] / zoom}px)`)
     }
-    positionTools()
-    viewport.addEventListener('resize', positionTools)
-    viewport.addEventListener('scroll', positionTools)
+    const schedulePosition = () => {
+      if (!rafId) rafId = requestAnimationFrame(updatePosition)
+    }
+    updatePosition()
+    viewport.addEventListener('resize', schedulePosition)
+    viewport.addEventListener('scroll', schedulePosition)
     return () => {
-      viewport.removeEventListener('resize', positionTools)
-      viewport.removeEventListener('scroll', positionTools)
-      sides.forEach((side, index) => {
-        if (previous[index]) root.style.setProperty(`--overlay-${side}`, previous[index])
-        else root.style.removeProperty(`--overlay-${side}`)
-      })
+      if (rafId) cancelAnimationFrame(rafId)
+      viewport.removeEventListener('resize', schedulePosition)
+      viewport.removeEventListener('scroll', schedulePosition)
+      if (customModified) {
+        sides.forEach((side, index) => {
+          if (previous[index]) root.style.setProperty(`--overlay-${side}`, previous[index])
+          else root.style.removeProperty(`--overlay-${side}`)
+        })
+      }
     }
   }, [])
 
   const geometry = (): { viewport: ReaderSize; media: ReaderSize } => {
-    const box = stage.current?.getBoundingClientRect()
+    const box = activeBox.current ?? stage.current?.getBoundingClientRect()
     const viewport = { width: box?.width ?? 0, height: box?.height ?? 0 }
     const media = { width: image.current?.naturalWidth || asset?.width || viewport.width, height: image.current?.naturalHeight || asset?.height || viewport.height }
     return { viewport, media }
@@ -128,6 +142,7 @@ function ReaderSession({ item, items, asset: binding, service, sessionId, toolsH
   }
   const zoom = (value: number, fromTools = false) => {
     if ((modalOpen && !(fromTools && toolsAvailable)) || asset?.kind !== 'image' || !decoded) return
+    activeBox.current = null
     gestures.cancel()
     const scale = clampReaderZoom(value)
     applyTransform({ scale, pan: { x: 0, y: 0 } })
@@ -153,11 +168,13 @@ function ReaderSession({ item, items, asset: binding, service, sessionId, toolsH
   }, [])
 
   const point = (event: PointerEvent<HTMLElement>) => {
-    const box = event.currentTarget.getBoundingClientRect()
+    const box = activeBox.current ?? event.currentTarget.getBoundingClientRect()
     return { x: event.clientX - box.left - box.width / 2, y: event.clientY - box.top - box.height / 2 }
   }
   const pointerDown = (event: PointerEvent<HTMLElement>) => {
     if (modalOpen || ignoresReaderInteraction(event.target) || event.button !== 0) return
+    const box = event.currentTarget.getBoundingClientRect()
+    activeBox.current = { left: box.left, top: box.top, width: box.width, height: box.height }
     gestures.start(event.pointerId, point(event), event.pointerType, event.timeStamp, currentTransform.current)
     event.currentTarget.setPointerCapture(event.pointerId)
   }
@@ -170,11 +187,13 @@ function ReaderSession({ item, items, asset: binding, service, sessionId, toolsH
   const pointerUp = (event: PointerEvent<HTMLElement>) => {
     if (modalOpen || ignoresReaderInteraction(event.target)) return
     const kind = gestures.end(event.pointerId, point(event), event.timeStamp)
+    activeBox.current = null
     if (kind === 'previous' && previous) onSelect(previous.id)
     if (kind === 'next' && next) onSelect(next.id)
   }
   const retry = () => {
     if (modalOpen) return
+    activeBox.current = null
     gestures.cancel()
     applyTransform(fitted)
     setDecodedUrl(undefined)
@@ -217,9 +236,9 @@ function ReaderSession({ item, items, asset: binding, service, sessionId, toolsH
         }
       }}
       onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp}
-      onPointerCancel={() => gestures.cancel()}
-      onLostPointerCapture={event => { if (gestures.hasPointer(event.pointerId)) gestures.cancel() }}
-      onContextMenu={() => gestures.cancel()}
+      onPointerCancel={() => { activeBox.current = null; gestures.cancel() }}
+      onLostPointerCapture={event => { activeBox.current = null; if (gestures.hasPointer(event.pointerId)) gestures.cancel() }}
+      onContextMenu={() => { activeBox.current = null; gestures.cancel() }}
       onClick={event => {
         if (modalOpen || ignoresReaderInteraction(event.target)) return
         if (gestures.consumeClick()) { event.preventDefault(); event.stopPropagation(); return }
@@ -243,14 +262,14 @@ function ReaderSession({ item, items, asset: binding, service, sessionId, toolsH
     </section>
 
     {showState && <section className="reader-state" aria-label="原始媒体状态" data-reader-state>
-      {error ? <><h2>原始媒体读取失败</h2><ErrorDetail error={error} /></>
-        : failed ? <><h2>无法解码此媒体</h2><p role="alert">浏览器无法显示当前原始媒体。已验证的字节仍可下载。</p></>
-          : unavailable ? <><h2>原始媒体暂不可用</h2><p role="alert">当前来源的媒体读取服务尚未就绪。</p></>
-            : <p role="status">{asset ? '原始字节已验证，正在准备显示…' : '正在读取并验证原始媒体…'}</p>}
+      {error ? <><h2>媒体读取失败</h2><ErrorDetail error={error} /></>
+        : failed ? <><h2>无法解码此媒体</h2><p role="alert">该媒体暂无法直接显示，但可直接下载。</p></>
+          : unavailable ? <><h2>媒体暂不可用</h2><p role="alert">媒体读取服务未就绪。</p></>
+            : <p role="status">{asset ? '正在准备显示…' : '正在加载与校验媒体…'}</p>}
       {(error || failed || unavailable) && <div className="reader-state-actions">
-        <button type="button" disabled={modalOpen || unavailable} onClick={retry}>重试原始媒体</button>
-        {asset && <button type="button" disabled={modalOpen || downloading} onClick={() => void download()}>下载已验证字节</button>}
-        <button type="button" disabled={modalOpen} onClick={onOpenInfo}>查看原始地址与信息</button>
+        <button type="button" disabled={modalOpen || unavailable} onClick={retry}>重试加载</button>
+        {asset && <button type="button" disabled={modalOpen || downloading} onClick={() => void download()}>下载原文件</button>}
+        <button type="button" disabled={modalOpen} onClick={onOpenInfo}>查看详情</button>
       </div>}
       {notice && <p className="reader-notice" role="status">{notice}</p>}
     </section>}

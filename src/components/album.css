@@ -58,16 +58,30 @@
   align-items: center;
   justify-content: center;
   gap: var(--space-1);
-  background: var(--surface-paper);
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   color: var(--text-primary);
   font-family: var(--font-body);
   font-size: var(--type-label);
+  font-weight: 500;
   line-height: 1.5;
+  border-radius: var(--radius-control);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 .album-video-open { top: 0; right: 0; box-sizing: border-box; max-width: 100%; min-height: var(--control-min); padding-inline: var(--space-2); pointer-events: auto; }
 .album-current { top: 0; left: 0; padding: var(--space-1); color: var(--accent-primary); }
 .album-current svg, .album-video-open svg { width: var(--icon-size); height: var(--icon-size); }
-.album-placeholder { display: flex; align-items: center; justify-content: center; overflow: hidden; font-size: var(--type-label); line-height: 1.5; }
+.album-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  font-size: var(--type-label);
+  line-height: 1.5;
+  color: var(--text-secondary);
+  background: #1C1B18;
+}
 .album-failure {
   position: absolute;
   inset: 0;

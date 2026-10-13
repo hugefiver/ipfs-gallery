@@ -5,7 +5,7 @@ import type { PaperProps } from '@mui/material/Paper'
 import useMediaQuery from '@mui/material/useMediaQuery'
 import { useForkRef } from '@mui/material/utils'
 import { GalleryChrome } from './GalleryChrome'
-import { XIcon } from '@phosphor-icons/react'
+import { ArrowLeftIcon, XIcon } from '@phosphor-icons/react'
 import { Action } from './Primitives'
 
 type DrawerPaper = ReactElement<PaperProps & { ref?: Ref<HTMLDivElement>; children: ReactNode[] }>
@@ -17,8 +17,8 @@ const FixedMenuSlide = forwardRef<HTMLDivElement, Omit<SlideProps, 'children'> &
   return cloneElement(children, { ref: mergedRef, children: [toggle, <Slide key="sidebar" {...transition} easing="var(--ease-feedback)">{content as ReactElement}</Slide>] })
 })
 
-export function GalleryDrawer({ open, onClose, title, labelledBy, focusKey, focusTarget, children }: {
-  open: boolean; onClose: () => void; title: string; labelledBy: string; focusKey: string | null; focusTarget?: string; children: ReactNode
+export function GalleryDrawer({ open, onClose, onBack, isSubpanel, cardMode, title, labelledBy, focusKey, focusTarget, children }: {
+  open: boolean; onClose: () => void; onBack?: () => void; isSubpanel?: boolean; cardMode?: boolean; title: string; labelledBy: string; focusKey: string | null; focusTarget?: string; children: ReactNode
 }) {
   const [paper, setPaper] = useState<HTMLDivElement | null>(null)
   const reduceMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
@@ -52,14 +52,24 @@ export function GalleryDrawer({ open, onClose, title, labelledBy, focusKey, focu
     element.addEventListener('keydown', onKey)
     return () => element.removeEventListener('keydown', onKey)
   }, [open, onClose, paper])
-  return <Drawer open={open} anchor="left" variant="temporary" elevation={0} className={`gallery-drawer${open ? '' : ' is-closed'}`} slots={{ transition: FixedMenuSlide }}
+  return <Drawer open={open} anchor="left" variant="temporary" elevation={0} className={`gallery-drawer${open ? '' : ' is-closed'}${cardMode ? ' is-card-mode' : ''}`} slots={{ transition: FixedMenuSlide }}
     transitionDuration={reduceMotion ? 0 : duration}
     ModalProps={{ keepMounted: true, disableRestoreFocus: true, closeAfterTransition: false }}
     onClose={(_event, reason) => { if (reason === 'backdropClick') onClose() }}
     slotProps={{ paper: { ref: setPaper, id: 'gallery-panel', 'aria-labelledby': labelledBy, 'aria-hidden': !open, inert: !open, className: 'gallery-drawer-paper' }, backdrop: { className: 'gallery-drawer-backdrop' } }}>
-    {open ? <GalleryChrome key="toggle" mode="reader" menuOpen onMenu={onClose} onHide={onClose} /> : null}
+    {open ? (
+      isSubpanel && onBack ? (
+        <Action key="back" className="reader-menu-trigger" aria-label="返回上一级" onClick={onBack}><ArrowLeftIcon aria-hidden="true" /></Action>
+      ) : (
+        <GalleryChrome key="toggle" mode="reader" menuOpen onMenu={onClose} onHide={onClose} />
+      )
+    ) : null}
     <section className="gallery-drawer-surface">
-      <header className="gallery-drawer-toolbar"><span className="gallery-drawer-toggle-space" aria-hidden="true" /><h2 id={labelledBy}>{title}</h2><Action className="gallery-drawer-close" data-modal-close aria-label={`关闭${title}`} onClick={onClose}><XIcon aria-hidden="true" /></Action></header>
+      <header className="gallery-drawer-toolbar">
+        <span className="gallery-drawer-toggle-space" aria-hidden="true" />
+        <h2 id={labelledBy}>{title}</h2>
+        <Action className="gallery-drawer-close" data-modal-close aria-label={`关闭${title}`} onClick={onClose}><XIcon aria-hidden="true" /></Action>
+      </header>
       <div className="gallery-drawer-content">{children}</div>
     </section>
   </Drawer>
