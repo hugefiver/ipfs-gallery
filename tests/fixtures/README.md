@@ -1,6 +1,6 @@
 # UnixFS browser fixtures
 
-`createGalleryFixtures()` in `unixfs.ts` uses the standard UnixFS importer 17 and blockstore-core 7. It returns:
+`createGalleryFixtures()` in `unixfs.ts` uses the standard UnixFS importer and blockstore-core. It returns:
 
 - `store` and `blocks`: a generator-read memory blockstore and a complete original-codec CID → bytes index. Every block is independently SHA-256 checked; DAG-PB links must resolve inside the index.
 - `raw`, `dagPb`, `multiblock`, `video`: real, decodable media with exact `bytes`, canonical file `cid`, and `ref`.
@@ -27,11 +27,11 @@ pnpm exec vitest run tests/fixtures
 
 The browser check uses a newly owned Chromium browser and empty context to decode all media and prove dedicated Worker HTTPS requests are intercepted by `context.route`. An installed Playwright Chromium is required; the test does not install it.
 
-Run app E2E after a successful production build using the unchanged project Playwright configuration:
+Run app E2E against the isolated production build, without replacing `dist/` or using the regular preview on port 4173:
 
 ```powershell
-pnpm build
-pnpm test:e2e
+pnpm build:reader-album
+pnpm exec playwright test --config playwright.config.ts --retries=0
 ```
 
-`sourceUrl(source, refs, view?, gateways?)` builds shared source/query links. Accessibility queries live in `../e2e/gallery-ui.ts`. Responsive tests attach real screenshots at 375, 768, and 1280 pixels rather than locking screenshots as descriptive snapshots.
+The E2E preview uses port 4183. Let the suite start its own server; don't run suites sharing that port concurrently. `sourceUrl(source, refs, view?, gateways?)` builds shared source/query links. Accessibility queries live in `../e2e/gallery-ui.ts`. Responsive tests attach real screenshots rather than locking screenshots as descriptive snapshots.

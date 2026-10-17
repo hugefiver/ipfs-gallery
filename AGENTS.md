@@ -1,102 +1,69 @@
-# AGENTS.md — Project Knowledge Base
+# Project maintenance guide
 
-## OVERVIEW
+## Scope and entry points
 
-Pure front-end IPFS image gallery (React 19 + TypeScript + Vite 8 + MUI 9). Media is retrieved
-and hash-verified inside a module Web Worker (`src/worker/`), exposed to the app only as
-verified Blob URLs. Reader (single media, focus) and Album (shortest-column masonry) modes
-share one filtered item list; tools live in a MUI temporary left sidebar.
+IPFS Gallery is a browser-only React/TypeScript application. The module Worker retrieves and hash-verifies content; the main thread creates Blob URLs from verified bytes. Reader and Album share the filtered list and one asset pool. Use [README](README.md) for usage, deployment, privacy and limits, [DESIGN](DESIGN.md) for interface requirements, and [fixture documentation](tests/fixtures/README.md) for deterministic browser data.
 
-## STRUCTURE
+| Area | Responsibility |
+| --- | --- |
+| `src/core/` | Query normalization, JSON/YAML/TOML manifests, paths, discovery and media validation |
+| `src/network/` | HTTPS raw-block broker, multihash verification, cache and UnixFS exporter adapter |
+| `src/worker/` | Worker runtime, typed client and message validation |
+| `src/shared/` | Contracts, errors, gateways and resource limits, without UI imports |
+| `src/hooks/` | Gallery sessions, preferences, asset scheduling, leases and reader interaction |
+| `src/app/` | App orchestration, selection, mode, panels and focus |
+| `src/components/` | Reader, Album, Drawer, panel contents and native input surfaces |
+| `src/theme/` | Visual tokens and MUI mapping |
+| `tests/` | Unit tests, deterministic UnixFS fixtures, E2E, deployment, public smoke and audit suites |
 
-```
-src/
-├── core/        # query parsing, manifest (JSON/YAML/TOML), media type detection — pure logic
-├── network/     # trustless gateway broker, block verification, path safety, cache
-├── worker/      # gallery.worker (main-thread client via protocol.ts); ALL byte verification here
-├── shared/      # contracts.ts (public types), errors, gateways, limits — no UI imports
-├── hooks/       # assetService (128 MiB pool, 3 slots, ref-leases), useGallery, useReaderAsset
-├── app/         # App.tsx sole orchestrator (mode/panel/focus); format.ts, readerAlbumTypes.ts
-├── components/  # ReaderSurface, AlbumGrid/Tile, GalleryDrawer/Panels/Chrome, SourceForm…
-└── theme/       # tokens.css (single source of visual truth) + MUI theme mapping tokens
-tests/
-├── fixtures/    # unixfs importer builds real CID fixtures incl. tiny.webm
-├── support/     # trustless-gateway dev server, owned-audit-browser launcher
-├── audit/       # Lighthouse via playwright-lighthouse on run-owned Chromium CDP endpoint
-├── e2e/         # Playwright specs (fixtures auto-block external requests)
-└── ui/ core/ network/ worker/ shared/  # Vitest unit tests (mirrors src)
-```
+Adapt UI to the data contracts rather than changing core/network/Worker protocols for layout needs. Preserve existing user changes. Run shell commands in PowerShell. Don't install software or perform Git writes without authorization for that operation.
 
-## WHERE TO LOOK
+## Data and lifecycle contracts
 
-| Task | Location | Notes |
-|------|----------|-------|
-| URL/query semantics | `src/core/query.ts` | `unixfs`/`cid`/`meta` sources + `q/tag/type/item/gateway` view params; no `mode` in URL |
-| Asset pooling/cancellation | `src/hooks/assetService.ts` | priority 0 original / 1 thumbnail / 2 fallback; LIMIT/CANCELLED never escalate |
-| Reader gestures/zoom | `src/hooks/readerInteraction.ts` | thresholds shared by E2E; IME/multi-touch guards |
-| Masonry geometry | `src/hooks/masonryLayout.ts` | tokens `--album-column-*-min` read from computed CSS, not window width |
-| Sidebar panels | `src/components/GalleryDrawer.tsx` + `GalleryPanels.tsx` | keepMounted; drafts survive close; tool portals render into dialog |
-| Audit harness | `tests/audit/audit-route.ts` | 45s work + bounded dispose/close/settle per run; document-bound React evidence before BFCache |
+All content blocks pass multihash validation before the UnixFS exporter consumes them. Don't yield unverified network chunks, use remote media URLs as fallback, hand-write a replacement DAG/HAMT decoder, or add undisclosed network channels. The broker uses only configured HTTPS gateways; requests omit credentials and referrers and reject redirects. Cache only verified blocks. Cancellation by one consumer must not abort another consumer's shared block request; abort fetch when its final consumer releases it.
 
-## CONVENTIONS
+Worker messages are validated at runtime. Every request has exactly one terminal result/error; progress and telemetry aren't completion. Cancellation ends an unfinished target with CANCELLED and separately acknowledges the cancel request. Completed targets are idempotent no-ops. New discovery invalidates the prior session. Reject stale session/request results before creating Blob URLs; crashes settle pending promises and permit recovery. Transfer exact-length, exclusively owned asset buffers, never a shared cache buffer.
 
-- Chinese-first UI copy; every control has a Chinese accessible name.
-- All colors/spacing/type trace to `src/theme/tokens.css` + `DESIGN.md`; no raw hex in components.
-- CSS files are namespaced per surface (`reader.css`, `album.css`, `app.css`); entry CSS is inlined by Vite.
-- Commands run in PowerShell; no `&&` chaining.
-- Tests never rely on network beyond `tests/support/trustless-gateway.ts` fixtures; E2E blocks all
-  external requests unless the spec opts in (public smoke uses real default gateways).
+Keep separate bounds for verified block cache, assembly reservation, unconsumed results and Blob cache. The shared limits remain authoritative, including 128 MiB Blob cache and three outstanding asset slots across sessions. Cancellation doesn't free a real in-flight slot before terminal settlement. Cache hits count toward operation input budgets. Reserve assembly peak space, consume or discard bounded results before scheduling more, and report LIMIT rather than adding an unbounded queue. These aren't total browser-memory guarantees.
 
-## ANTI-PATTERNS (THIS PROJECT)
+`AssetService` and `MainAssetSet` provide one resource pool. Originals and explicit downloads use priority 0, visible thumbnails 1, verified original fallback 2. LIMIT/CANCELLED don't trigger a more expensive fallback. Acquire only visible album assets, release mode-only consumers on exit, and don't clear the shared session/cache for mode or panel changes. Share one IntersectionObserver per album scroll root; don't create one per tile. Cache gesture geometry at pointer-down instead of synchronously measuring every pan/pinch frame.
 
-- Do not edit `src/core/`, `src/network/`, `src/worker/`, `src/shared/` for UI needs — app adapts to them.
-- Do not persist UI state (mode, chrome, panel, scroll, CID history) to storage; preferences v1 has a
-  strict field whitelist (`tests/ui/preferences.test.ts` enforces reject-on-unknown).
-- Do not render media from unverified gateway URLs; the worker is the only byte path.
-- Do not cover native `<video>` controls with capture layers; reader tools avoid the control area.
-- Do not weaken assertions (44px targets, 2px anchor tolerance, exact verified bytes) to make suites pass.
-- Never build to default `dist/` for verification — use `pnpm run build:reader-album` (`.reader-album-build/`).
+The reader owns decode, transform, gestures and download scope; App owns mode, panel and focus intentions. Panel visibility must not become the reader asset's enabled condition. Tool portals exist only in the active host; inert exit paint cannot retain an action/resource owner. Downloads acquire a separate verified-original lease and allow a one-second handoff before release. Same-item downloads may survive panel closure; item/session/mode changes cancel old work. Sanitize filenames and release Blob references without revoking a still-used viewer/download resource.
 
-## COMMANDS
+## Query, discovery and preferences
+
+Sources use the shared normalizer and canonical serializer. Keep precedence, one-pass decoding, path safety and size budgets from README. Views and selections use replace semantics, source navigation uses push, and popstate restores URL state. An unknown or filtered-out item never expands the filter or silently opens an unrelated media item. Mode, chrome and panel state don't enter URLs or history.
+
+For explicit manifests, known extensions select their parser; otherwise JSON, TOML and YAML are tried within the same budget and must pass the full schema. Directory discovery uses the first existing authoritative manifest and requires explicit browse to bypass a bad one. Scanning doesn't follow symlinks or interpret nested manifests; preserve valid duplicate paths rather than globally deduplicating every CID. Metadata dimensions are hints, not verified original dimensions. All metadata stays plain text.
+
+The only preference key is `ipfs-gallery.preferences.v1`. Preserve the strict version/field whitelist and compatibility layout/sidebar fields without restoring their old UI behavior. Limit the stored JSON to 40 KiB before parsing; gateways are normalized through the shared normalizer, with at most eight entries and 4096 characters per input. Reject unknown fields, polluted keys and invalid records as a whole. An empty gateway preference means defaults.
+
+Default to no writes. A valid saved record restores opt-in; explicit enable saves the current local preference snapshot, not a URL override. URL gateways take priority over local preference and defaults, but don't become local preference until explicit apply. Invalid URL configuration fails closed. Storage getter/read/write/remove failures leave memory usable and report the actual outcome. Disabling save deletes only this key and stops writes, even if deletion fails; clear-and-reset also restores defaults without overriding explicit URL gateways. Never call localStorage.clear(), persist CID/path/item/filter/media/history/authentication/statistics, or add cross-tab synchronization. Gateway cancel drops only unapplied edits; a storage failure isn't rejection of a valid in-memory gateway setting.
+
+## Interface and verification
+
+Keep Chinese accessible names, native video controls, IME guards and browser zoom. Respect the actual portal DOM keyboard boundary and MUI focus trap; a React ancestor handler needn't receive a portal's key event. Apply explicit source/navigation focus intentions before ordinary close restoration. Don't let late resource completion steal focus.
+
+Use isolated production output for verification; ordinary release/deployment builds may use `pnpm build` as documented in README. Don't replace a user's `dist/`, take over port 4173, reuse a personal browser profile or terminate processes by port/name. Test services use 4183 with exclusive ownership; suites sharing it and report directories run serially. Cleanup is limited to owned resources; process termination requires PID and start identity.
+
+Run checks relevant to changes locally, then consolidate affected integration checks. Don't freeze prose, package descriptions or deleted-component absence with tests. Preserve functional protocol, safety, cancellation, resource and real download-byte assertions. Don't weaken a failing check, mask it with retries or call an interrupted run a pass.
 
 ```powershell
-pnpm typecheck; pnpm typecheck:shared; pnpm lint; pnpm test   # statics + 330 unit tests
-pnpm run build:reader-album                                    # isolated prod build (never default build)
-pnpm exec playwright test --config playwright.config.ts --retries=0   # full E2E (2 workers, 4183 preview)
-pnpm run test:deployment   # /gallery/ subpath + CSP
-pnpm run test:smoke        # real public gateway (network-dependent, report separately)
-pnpm run audit:browser -- --retries=0   # 6 surfaces × 3 runs Lighthouse, 1 worker
-pnpm run doctor:react      # react-doctor static scan (20 known warnings, see NOTES)
+pnpm typecheck
+pnpm typecheck:shared
+pnpm lint
+pnpm test
+pnpm build:reader-album
+pnpm exec playwright test --config playwright.config.ts --retries=0
+pnpm exec playwright test --config playwright.deployment.config.ts --retries=0
+pnpm exec playwright test --config playwright.smoke.config.ts --retries=0
+pnpm exec playwright test --config playwright.audit.config.ts --retries=0
+pnpm audit:support
+pnpm doctor:react
 ```
 
-## NOTES — DEBUGGING EXPERIENCE
+Fixture tests exercise real Worker/raw-block/UnixFS verification and deny unexpected external requests. Public smoke deliberately uses real gateways and is reported separately. Compare actual downloaded and rendered bytes, not success text. Production builds must not load development-only tools or test gateway defaults. Deployment checks cover `/gallery/`, module Worker paths, Blob media and the documented CSP; don't weaken CSP to fix layout.
 
-- **Playwright config pitfalls**: CI sets `retries: 2` — always pass `--retries=0` explicitly for
-  acceptance runs; `pnpm run test:e2e -- --retries=0` silently forwards `--` to Playwright (args land
-  as positional), use `pnpm exec playwright test … --retries=0` instead.
-- **Port 4183 is the E2E/audit preview** (`preview:reader-album`, strictPort, `reuseExistingServer:
-  false`); 4173 belongs to the user's live preview — never touch it, its processes, or `dist/`.
-- **Flaky timeouts**: historic 22/24-readiness and endpoint-launch 90s timeouts were observed under
-  parallel browser load and never root-caused. Do not mask with retries/longer timeouts; rerun the
-  same case in isolation and keep failure evidence.
-- **Lighthouse `LanternError: NO_LCP` on stderr** during empty-page audits is secondary BFCache-probe
-  noise: verify `lhr.runtimeError === null` and that `largest-contentful-paint` has numericValue/score
-  in each run JSON before trusting category scores.
-- **BFCache probe breaks transient state**: Lighthouse 13.5 navigates to `chrome://terms` and back at
-  the end of gathering, reloading the app. Target-state verification (geometry/PNG/React events) must
-  happen in `before-bfcache` checkpoint against the measured document, or album state "resets" to reader.
-- **React portals bypass MUI fiber handlers**: keydown logic attached via JSX on the dialog root never
-  sees portal children; use a native DOM listener on the actual dialog element (guards: IME 229,
-  defaultPrevented, single-Escape). Focus-trap must stay enabled; same-position toggles live inside
-  the trap scope.
-- **CSS zoom units**: `getBoundingClientRect()` returns visual (zoomed) px while layout APIs
-  (`clientWidth`, computed widths) are unzoomed — mixing them causes mis-hit tests at 150–200% zoom.
-  `parseFloat('.18s')` is 0.18 *ms* — parse CSS durations with unit awareness (see `usePanelDuration`).
-- **Windows font reality**: first CJK layout pays ~130ms `FontCache::GetFontPlatformData` per Noto
-  face (25/17 MB mapped locals). Font-family reuse tricks measured no net win; keep fonts as-is and
-  avoid synchronous geometry reads on startup hot paths instead.
-- **react-doctor baseline**: 20 warnings (6 complexity, AlbumTile effect-pairs, index keys in static
-  text lists, one non-interactive handler with named keyboard path) — reviewed as acceptable; do not
-  churn code just to zero them.
-- **StrictMode double-mount** fires dev-only double requests; production sources tests are the
-  authority for request counts, not dev-server observation.
+Audit the measured document's target state before BFCache probing, which may reload transient album state. Check runtimeError and numeric LCP evidence, not just category scores. Use run-owned Chromium/CDP through Playwright, not Lighthouse CLI. Empty/reader/album each have mobile and desktop samples, three per group; report medians and retain real failures. Support-suite success doesn't establish UI audit scores. CSS zoom changes visual geometry units; don't mix getBoundingClientRect() coordinates with unscaled layout measurements. Production request counts, not DEV StrictMode double-mount observations, determine duplicate-load behavior.
+
+The ordinary no-source entry is closed and opened explicitly. Tests must exercise the same product experience, not a webdriver/port-specific substitute. Report unverified screen-reader, browser-engine, deployment-header and public-network coverage rather than inferring it from compilation or fixture success.
