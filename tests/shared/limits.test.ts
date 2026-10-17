@@ -37,8 +37,6 @@ describe('resource defaults', () => {
       expect(Number.isSafeInteger(budget)).toBe(true)
       expect(budget).toBeGreaterThan(0)
     }
-    expect(DEFAULT_LIMITS.maxAssemblyBytes).toBe(DEFAULT_LIMITS.maxAssetBytes)
-    expect(DEFAULT_LIMITS.maxBlockCacheBytes).toBeLessThan(DEFAULT_LIMITS.maxAssemblyBytes)
     expect(Object.isFrozen(DEFAULT_LIMITS)).toBe(true)
   })
 

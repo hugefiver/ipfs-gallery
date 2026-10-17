@@ -5,8 +5,12 @@ import type { ImportResult } from 'ipfs-unixfs-importer'
 import { fixedSize } from 'ipfs-unixfs-importer/chunker'
 import { CID } from 'multiformats/cid'
 import { identity } from 'multiformats/hashes/identity'
+import { sha256 } from 'multiformats/hashes/sha2'
+import { decode, encode } from '@ipld/dag-pb'
 import { createGatewayBroker } from '../../src/network/broker'
 import { createContentReader } from '../../src/network/reader'
+import { GalleryDomainError } from '../../src/shared/errors'
+import { isInputBudgetExceeded } from '../../src/core/input-budget'
 import type { VerifiedBlockSource } from '../../src/network/types'
 import { cidFromRequest, collect, collectBytes, config, rawBlock, response, signal } from './helpers'
 
@@ -20,6 +24,10 @@ const bigBytes = Uint8Array.from({ length: 300_001 }, () => {
 })
 let root: string
 let hamt: string
+let inlineDirectory: string
+let damagedDirectory: string
+let unsupportedDirectory: string
+let damagedChild: string
 const imports = new Map<string, ImportResult>()
 const sources: VerifiedBlockSource[] = []
 
@@ -35,6 +43,28 @@ beforeAll(async () => {
   }
   root = imports.get('album')!.cid.toString()
   hamt = imports.get('album/sharded')!.cid.toString()
+  for await (const entry of importer([{ path: 'inline.bin', content: Uint8Array.of(7, 8, 9) }], store, { rawLeaves: false, cidVersion: 0, wrapWithDirectory: true })) {
+    imports.set(entry.path ?? '', entry)
+    if (entry.path === '') inlineDirectory = entry.cid.toString()
+  }
+  const damagedBytes = Uint8Array.of(255)
+  const damagedCid = CID.createV1(0x70, await sha256.digest(damagedBytes))
+  damagedChild = damagedCid.toString()
+  await store.put(damagedCid, damagedBytes)
+  for await (const entry of importer(['a-good', 'b-bad', 'c-good'].map((path, index) => ({ path, content: Uint8Array.of(index) })), store,
+    { rawLeaves: true, cidVersion: 1, wrapWithDirectory: true })) {
+    if (entry.path !== '') continue
+    const node = decode(await collectBytes(store.get(entry.cid)))
+    const bytes = encode({ ...node, Links: node.Links.map((link) => link.Name === 'b-bad' ? { ...link, Hash: damagedCid } : link) })
+    const cid = CID.createV1(0x70, await sha256.digest(bytes))
+    await store.put(cid, bytes)
+    damagedDirectory = cid.toString()
+    const unsupported = encode({ ...node, Links: node.Links.map((link) => link.Name === 'b-bad'
+      ? { ...link, Hash: CID.createV1(0x71, damagedCid.multihash) } : link) })
+    const unsupportedCid = CID.createV1(0x70, await sha256.digest(unsupported))
+    await store.put(unsupportedCid, unsupported)
+    unsupportedDirectory = unsupportedCid.toString()
+  }
 })
 
 afterEach(() => { for (const source of sources.splice(0)) source.dispose() })
@@ -61,7 +91,7 @@ describe('standard UnixFS adapter through verified raw-block broker', () => {
     const { reader, fetch } = setup()
     const entries = await collect(reader.ls({ cid: hamt, path: [] }, signal()))
     expect(entries).toHaveLength(80)
-    expect(entries.every((entry) => entry.kind === 'file' && entry.size === 2n)).toBe(true)
+    expect(entries.every((entry) => !('error' in entry) && entry.kind === 'file' && entry.size === 2n)).toBe(true)
     expect(entries.map((entry) => entry.name).sort()).toEqual(Array.from({ length: 80 }, (_, index) => `file-${index}.bin`).sort())
     expect(fetch.mock.calls.length).toBeGreaterThan(81)
     for (const index of [0, 17, 79]) {
@@ -73,8 +103,8 @@ describe('standard UnixFS adapter through verified raw-block broker', () => {
   it('preserves literal special filenames and exposes symlinks without reading their target', async () => {
     const { reader } = setup()
     const entries = await collect(reader.ls({ cid: root, path: [] }, signal()))
-    expect(entries.find((entry) => entry.name === 'link')?.kind).toBe('symlink')
-    expect(entries.find((entry) => entry.name === 'nested')?.kind).toBe('directory')
+    expect(entries.find((entry) => entry.name === 'link')).toMatchObject({ kind: 'symlink' })
+    expect(entries.find((entry) => entry.name === 'nested')).toMatchObject({ kind: 'directory' })
     expect(await collectBytes(reader.read({ cid: root, path: ['nested', '雪 #?,%.png'] }, { signal: signal(), maxBytes: 4 }))).toEqual(Uint8Array.of(1, 2, 3, 4))
     await expect(collectBytes(reader.read({ cid: root, path: ['link'] }, { signal: signal(), maxBytes: 100 }))).rejects.toMatchObject({ error: { code: 'UNSUPPORTED' } })
   })
@@ -114,6 +144,71 @@ describe('standard UnixFS adapter through verified raw-block broker', () => {
     expect(fetch).toHaveBeenCalledTimes(1)
   })
 
+  it('distinguishes cumulative input exhaustion from a single output LIMIT', async () => {
+    const { reader } = setup()
+    const file = { cid: imports.get('inline.bin')!.cid.toString(), path: [] }
+    const outputFailure = await collectBytes(reader.read(file, { signal: signal(), maxBytes: 1 })).catch((error: unknown) => error)
+    expect(outputFailure).toMatchObject({ error: { code: 'LIMIT' } })
+    expect(isInputBudgetExceeded(outputFailure)).toBe(false)
+    const { reader: bounded } = setup(1)
+    const inputFailure = await bounded.stat(file, signal()).catch((error: unknown) => error)
+    expect(inputFailure).toMatchObject({ error: { code: 'LIMIT' } })
+    expect(isInputBudgetExceeded(inputFailure)).toBe(true)
+  })
+
+  it.each(['parse', 'codec'])('yields a local %s failure between healthy verified directory children', async (kind) => {
+    const { reader } = setup()
+    const entries = await collect(reader.ls({ cid: kind === 'parse' ? damagedDirectory : unsupportedDirectory, path: [] }, signal()))
+    expect(entries.map((entry) => entry.name)).toEqual(['a-good', 'b-bad', 'c-good'])
+    expect(entries[0]).toMatchObject({ kind: 'file', size: 1n })
+    expect(entries[1]).toMatchObject({ ref: { path: [] }, error: { code: 'UNSUPPORTED' } })
+    expect(entries[2]).toMatchObject({ kind: 'file', size: 1n })
+  })
+
+  it('continues healthy siblings after a single-child LIMIT', async () => {
+    const { source, reader } = setup()
+    const get = source.get.bind(source)
+    vi.spyOn(source, 'get').mockImplementation(async (cid, signal) => {
+      if (cid === damagedChild) throw new GalleryDomainError({ code: 'LIMIT', message: 'block limit', retryable: false })
+      return get(cid, signal)
+    })
+    const entries = await collect(reader.ls({ cid: damagedDirectory, path: [] }, signal()))
+    expect(entries.map((entry) => entry.name)).toEqual(['a-good', 'b-bad', 'c-good'])
+    expect(entries[1]).toMatchObject({ error: { code: 'LIMIT' } })
+    expect(entries[2]).toMatchObject({ kind: 'file', size: 1n })
+  })
+
+  it.each(['abort', 'cancel', 'input budget'])('throws %s instead of yielding a local child failure', async (kind) => {
+    const { source, reader } = setup()
+    const get = source.get.bind(source)
+    vi.spyOn(source, 'get').mockImplementation(async (cid, signal) => {
+      if (cid === damagedChild) {
+        if (kind === 'abort') throw new DOMException('abort', 'AbortError')
+        if (kind === 'cancel') throw new GalleryDomainError({ code: 'CANCELLED', message: 'cancelled', retryable: false })
+        const { reader: bounded } = setup(0)
+        await bounded.stat({ cid: damagedChild, path: [] }, signal)
+      }
+      return get(cid, signal)
+    })
+    const iterator = reader.ls({ cid: damagedDirectory, path: [] }, signal())[Symbol.asyncIterator]()
+    expect((await iterator.next()).value).toMatchObject({ name: 'a-good', kind: 'file' })
+    await expect(iterator.next()).rejects.toMatchObject({ error: { code: kind === 'input budget' ? 'LIMIT' : 'CANCELLED' } })
+    expect(source.snapshot().every((gateway) => gateway.inFlight === 0)).toBe(true)
+  })
+
+  it('terminates on an internal HAMT shard failure instead of reporting a recoverable child', async () => {
+    const node = decode(await collectBytes(store.get(CID.parse(hamt))))
+    const shard = node.Links.find((link) => link.Name?.length === 2)
+    expect(shard).toBeDefined()
+    const { source, reader } = setup()
+    const get = source.get.bind(source)
+    vi.spyOn(source, 'get').mockImplementation(async (cid, signal) => {
+      if (cid === shard!.Hash.toV1().toString()) throw new GalleryDomainError({ code: 'NETWORK', message: 'shard unavailable', retryable: true })
+      return get(cid, signal)
+    })
+    await expect(collect(reader.ls({ cid: hamt, path: [] }, signal()))).rejects.toMatchObject({ error: { code: 'NETWORK' } })
+  })
+
   it('counts bounded inline identity input and rejects non-UnixFS codec honestly', async () => {
     const { source } = setup()
     const bytes = Uint8Array.of(1, 2, 3)
@@ -128,6 +223,27 @@ describe('standard UnixFS adapter through verified raw-block broker', () => {
     const { reader } = setup()
     await expect(reader.stat({ cid: root, path: ['does-not-exist'] }, signal())).rejects.toMatchObject({ error: { code: 'NOT_FOUND' } })
     await expect(reader.stat({ cid: root, path: ['..', 'large.bin'] }, signal())).rejects.toMatchObject({ error: { code: 'INVALID_INPUT' } })
+  })
+
+  it.each(['stat', 'read', 'empty read', 'ls'])('rejects a missing suffix after a real DAG-PB file before %s can return content', async (method) => {
+    const { reader } = setup()
+    const ref = { cid: imports.get('inline.bin')!.cid.toString(), path: ['does-not-exist'] }
+    const result = method === 'stat' ? reader.stat(ref, signal())
+      : method === 'ls' ? collect(reader.ls(ref, signal()))
+        : collectBytes(reader.read(ref, { signal: signal(), maxBytes: bigBytes.length, ...(method === 'empty read' ? { length: 0 } : {}) }))
+    await expect(result).rejects.toMatchObject({ error: { code: 'NOT_FOUND' } })
+  })
+
+  it('checks the complete path after a directory/file prefix and accepts canonical equivalents of its root CID', async () => {
+    const { reader } = setup()
+    const valid = { cid: inlineDirectory, path: ['inline.bin'] }
+    expect(await collectBytes(reader.read(valid, { signal: signal(), maxBytes: 3 }))).toEqual(Uint8Array.of(7, 8, 9))
+    expect(await reader.stat({ ...valid, cid: CID.parse(inlineDirectory).toV1().toString() }, signal())).toEqual({ kind: 'file', size: 3n })
+    const invalid = { ...valid, path: [...valid.path, 'does-not-exist'] }
+    const iterator = reader.read(invalid, { signal: signal(), maxBytes: 3 })[Symbol.asyncIterator]()
+    await expect(iterator.next()).rejects.toMatchObject({ error: { code: 'NOT_FOUND' } })
+    await expect(reader.stat(invalid, signal())).rejects.toMatchObject({ error: { code: 'NOT_FOUND' } })
+    await expect(collect(reader.ls(invalid, signal()))).rejects.toMatchObject({ error: { code: 'NOT_FOUND' } })
   })
 
   it('propagates read cancellation to the active broker fetch without gateway failure penalties', async () => {

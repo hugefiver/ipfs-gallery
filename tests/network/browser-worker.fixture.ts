@@ -1,6 +1,6 @@
 import { createGatewayBroker } from '../../src/network/broker'
 import { createContentReader } from '../../src/network/reader'
-import type { ContentEntry } from '../../src/core/types'
+import type { ContentListingEntry } from '../../src/core/types'
 import type { ContentRef, SessionConfig } from '../../src/shared/contracts'
 import { toGalleryError } from '../../src/shared/errors'
 
@@ -17,7 +17,7 @@ worker.onmessage = (event: MessageEvent<FixtureRequest>) => {
   const signal = new AbortController().signal
   async function run() {
     const stat = await reader.stat(event.data.directory, signal)
-    const entries: ContentEntry[] = []
+    const entries: ContentListingEntry[] = []
     for await (const entry of reader.ls(event.data.directory, signal)) entries.push(entry)
     const chunks: Uint8Array[] = []
     let length = 0

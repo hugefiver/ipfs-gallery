@@ -1,4 +1,4 @@
-import type { ContentRef, ResourceLimits, WorkerResponse } from '../shared/contracts'
+import type { ContentRef, GalleryError, ResourceLimits, WorkerResponse } from '../shared/contracts'
 
 export interface ContentStat {
   kind: 'file' | 'directory' | 'symlink'
@@ -10,6 +10,14 @@ export interface ContentEntry extends ContentStat {
   ref: ContentRef
 }
 
+export interface ContentEntryFailure {
+  name: string
+  ref: ContentRef
+  error: GalleryError
+}
+
+export type ContentListingEntry = ContentEntry | ContentEntryFailure
+
 export interface ReadOptions {
   signal: AbortSignal
   maxBytes: number
@@ -19,7 +27,7 @@ export interface ReadOptions {
 
 export interface ContentReader {
   stat(ref: ContentRef, signal: AbortSignal): Promise<ContentStat>
-  ls(ref: ContentRef, signal: AbortSignal): AsyncIterable<ContentEntry>
+  ls(ref: ContentRef, signal: AbortSignal): AsyncIterable<ContentListingEntry>
   read(ref: ContentRef, options: ReadOptions): AsyncIterable<Uint8Array>
 }
 

@@ -1,11 +1,12 @@
 import type { ContentRef, GalleryError, GalleryInput, GalleryItem, GalleryResult } from '../shared/contracts'
 import { GalleryDomainError, toGalleryError } from '../shared/errors'
 import { sniffMedia } from './headers'
+import { InputBudgetExceededError, isInputBudgetExceeded } from './input-budget'
 import { parseManifest } from './manifest'
 import { canonicalRef, fail, stableItemId, validateSegment } from './paths'
 import { normalizeContentRef } from './query'
 import { checkSignal, readBounded, rethrowCancellation } from './read'
-import type { ContentEntry, ContentReader, ContentStat, DiscoveryOptions, GalleryProgress } from './types'
+import type { ContentListingEntry, ContentReader, ContentStat, DiscoveryOptions, GalleryProgress } from './types'
 
 const manifestNames = ['gallery.json', 'gallery.yaml', 'gallery.yml', 'gallery.toml']
 const PREFIX_BYTES = 16 * 1024
@@ -20,7 +21,11 @@ export async function discoverGallery(
   const { signal, limits } = options
   let entries = 0, outputBytes = 0, accepted = 0, lastProgress = -Infinity
   const warnings: GalleryError[] = []
-  let partial = false, directoryBudgetReached = false
+  let partial = false, directoryBudgetReached = false, inputBudgetReached = false
+  function rethrowInterruption(error: unknown): void {
+    rethrowCancellation(error, signal)
+    if (isInputBudgetExceeded(error)) throw error
+  }
   function progress(phase: GalleryProgress['phase'], completed: number, total?: number): void {
     checkSignal(signal)
     const now = Date.now()
@@ -34,7 +39,7 @@ export async function discoverGallery(
   }
   async function bytes(ref: ContentRef, stat: ContentStat, maxBytes: number, prefix = false): Promise<Uint8Array> {
     const remaining = limits.maxDiscoveryInputBytes - outputBytes
-    if (remaining <= 0) fail('LIMIT', '图库读取总预算已用尽。', ref)
+    if (remaining <= 0) throw new InputBudgetExceededError('图库读取总预算已用尽。', ref)
     if (prefix && stat.size !== undefined && remaining < Number(stat.size < BigInt(maxBytes) ? stat.size : BigInt(maxBytes))) {
       fail('LIMIT', '剩余读取预算不足以识别文件。', ref)
     }
@@ -47,11 +52,11 @@ export async function discoverGallery(
       maxRetainedBytes: Math.max(0, limits.maxAssemblyBytes - cap),
       onChunk: (byteLength) => {
         outputBytes += byteLength
-        if (outputBytes > limits.maxDiscoveryInputBytes) fail('LIMIT', '图库读取总预算已用尽。', ref)
+        if (outputBytes > limits.maxDiscoveryInputBytes) throw new InputBudgetExceededError('图库读取总预算已用尽。', ref)
       },
     })
     if (prefix && cap < maxBytes && stat.size === undefined && value.byteLength === cap) {
-      fail('LIMIT', '剩余读取预算不足以识别文件。', ref)
+      throw new InputBudgetExceededError('图库读取总预算已用尽。', ref)
     }
     return value
   }
@@ -62,9 +67,8 @@ export async function discoverGallery(
     if (info.kind !== 'file') fail('INVALID_METADATA', '描述文件必须是普通文件，不能是目录或符号链接。', ref)
     return parseManifest(await bytes(ref, info, Math.min(limits.maxManifestBytes, 1024 * 1024)), ref, limits)
   }
-  async function list(ref: ContentRef): Promise<ContentEntry[]> {
-    const result: ContentEntry[] = []
-    if (directoryBudgetReached) return result
+  async function* list(ref: ContentRef): AsyncIterable<ContentListingEntry> {
+    if (directoryBudgetReached) return
     for await (const entry of reader.ls(ref, signal)) {
       checkSignal(signal)
       if (entries >= limits.maxDirectoryEntries) {
@@ -73,12 +77,10 @@ export async function discoverGallery(
         break
       }
       entries++
-      validateSegment(entry.name)
-      result.push(entry)
       progress('listing', entries)
+      yield entry
     }
     checkSignal(signal)
-    return result.sort((a, b) => compare(a.name, b.name))
   }
   function candidate(source: ContentRef, ref: ContentRef, path: string, kind: 'image' | 'video'): GalleryItem {
     return {
@@ -102,44 +104,57 @@ export async function discoverGallery(
         return
       }
       const nextAncestors = new Set(ancestors).add(ref.cid)
-      for (const entry of await list(ref)) {
-        checkSignal(signal)
-        if (alreadyAccepted + found.length >= limits.maxItems) {
-          if (!itemLimitReported) { warn('LIMIT', '媒体项目数量达到上限。', root, true); itemLimitReported = true }
-          break
-        }
-        const childPath = path ? `${path}/${entry.name}` : entry.name
-        const childRef = normalizeContentRef(canonicalRef(entry.ref))
-        if (entry.kind === 'symlink') {
-          warn('UNSUPPORTED', '未跟随符号链接。', childRef)
-          continue
-        }
-        if (entry.kind === 'directory') {
-          try { await walk(childRef, childPath, depth + 1, nextAncestors) } catch (error) {
-            rethrowCancellation(error, signal)
+      try {
+        for await (const entry of list(ref)) {
+          checkSignal(signal)
+          if ('error' in entry) {
+            rethrowCancellation(new GalleryDomainError(entry.error), signal)
+            warnings.push({ ...entry.error, ref: entry.ref }); partial = true
+            continue
+          }
+          validateSegment(entry.name)
+          if (alreadyAccepted + found.length >= limits.maxItems) {
+            if (!itemLimitReported) { warn('LIMIT', '媒体项目数量达到上限。', root, true); itemLimitReported = true }
+            break
+          }
+          const childPath = path ? `${path}/${entry.name}` : entry.name
+          const childRef = normalizeContentRef(canonicalRef(entry.ref))
+          if (entry.kind === 'symlink') {
+            warn('UNSUPPORTED', '未跟随符号链接。', childRef)
+            continue
+          }
+          if (entry.kind === 'directory') {
+            await walk(childRef, childPath, depth + 1, nextAncestors)
+            continue
+          }
+          try {
+            const prefix = await bytes(childRef, entry, PREFIX_BYTES, true)
+            const type = sniffMedia(prefix)
+            if (!type) {
+              if (mediaExtension.test(entry.name)) warn('UNSUPPORTED', '文件扩展名与支持的媒体头不匹配。', childRef)
+              continue
+            }
+            if (entry.size !== undefined && entry.size > BigInt(limits.maxAssetBytes)) {
+              warn('LIMIT', '媒体文件超过单资源限制。', childRef, true)
+              continue
+            }
+            found.push({ path: childPath, item: candidate(root, childRef, childPath, type.kind) })
+          } catch (error) {
+            rethrowInterruption(error)
             warnings.push({ ...toGalleryError(error), ref: childRef }); partial = true
           }
-          continue
         }
-        try {
-          const prefix = await bytes(childRef, entry, PREFIX_BYTES, true)
-          const type = sniffMedia(prefix)
-          if (!type) {
-            if (mediaExtension.test(entry.name)) warn('UNSUPPORTED', '文件扩展名与支持的媒体头不匹配。', childRef)
-            continue
-          }
-          if (entry.size !== undefined && entry.size > BigInt(limits.maxAssetBytes)) {
-            warn('LIMIT', '媒体文件超过单资源限制。', childRef, true)
-            continue
-          }
-          found.push({ path: childPath, item: candidate(root, childRef, childPath, type.kind) })
-        } catch (error) {
-          rethrowCancellation(error, signal)
-          warnings.push({ ...toGalleryError(error), ref: childRef }); partial = true
-        }
+      } catch (error) {
+        rethrowInterruption(error)
+        warnings.push({ ...toGalleryError(error), ref }); partial = true
       }
     }
-    await walk(root, '', 0, new Set())
+    try { await walk(root, '', 0, new Set()) } catch (error) {
+      rethrowCancellation(error, signal)
+      if (!isInputBudgetExceeded(error)) throw error
+      inputBudgetReached = true
+      warnings.push({ ...toGalleryError(error), ref: root }); partial = true
+    }
     found.sort((a, b) => compare(a.path, b.path))
     return { title: root.path.at(-1) ?? 'IPFS 图库', description: '', items: found.map(({ item }) => item), warnings: [], partial: false }
   }
@@ -154,7 +169,7 @@ export async function discoverGallery(
           const ref = { cid: root.cid, path: [...root.path, name] }
           let candidateStat: ContentStat
           try { candidateStat = await reader.stat(ref, signal) } catch (error) {
-            rethrowCancellation(error, signal)
+            rethrowInterruption(error)
             const failure = toGalleryError(error)
             // A gateway 404 means unavailable content, not proof that the directory name is absent.
             if (failure.code === 'NOT_FOUND' && failure.gateway === undefined) continue
@@ -176,7 +191,7 @@ export async function discoverGallery(
       try {
         return parseManifest(await bytes(root, stat, Math.min(limits.maxManifestBytes, 1024 * 1024)), root, limits)
       } catch (error) {
-        rethrowCancellation(error, signal)
+        rethrowInterruption(error)
         if (toGalleryError(error).code !== 'INVALID_METADATA') throw error
       }
     }
@@ -200,6 +215,7 @@ export async function discoverGallery(
     const result: GalleryResult = { title: 'IPFS 图库', description: '', items: [], warnings, partial: false }
     for (const root of roots) {
       checkSignal(signal)
+      if (inputBudgetReached) break
       if (accepted >= limits.maxItems) { warn('LIMIT', '媒体项目数量达到上限。', root, true); break }
       try {
         const value = await resolve(root, source.browse)
@@ -211,6 +227,7 @@ export async function discoverGallery(
         warnings.push(...value.warnings); partial ||= value.partial
       } catch (error) {
         rethrowCancellation(error, signal)
+        if (isInputBudgetExceeded(error)) inputBudgetReached = true
         if (source.kind === 'unixfs') throw error
         warnings.push({ ...toGalleryError(error), ref: root }); partial = true
       }

@@ -1,6 +1,8 @@
 import { exporter, NotFoundError, NoResolverError, NotUnixFSError, UnderReadError, OverReadError, InvalidParametersError } from 'ipfs-unixfs-exporter'
 import type { ReadableStorage, UnixFSEntry } from 'ipfs-unixfs-exporter'
 import type { ContentReader, ContentStat } from '../core/types'
+import { InputBudgetExceededError, isInputBudgetExceeded } from '../core/input-budget'
+import { rethrowCancellation } from '../core/read'
 import type { ContentRef } from '../shared/contracts'
 import { GalleryDomainError } from '../shared/errors'
 import { checkSignal, networkError } from './errors'
@@ -19,14 +21,15 @@ function statEntry(entry: UnixFSEntry): ContentStat {
   throw networkError('UNSUPPORTED', '不是支持的 UnixFS 文件或目录。')
 }
 
-function readerError(error: unknown, signal: AbortSignal): never {
+function readerError(error: unknown, signal: AbortSignal): GalleryDomainError {
   checkSignal(signal)
-  if (error instanceof GalleryDomainError) throw error
-  if (error instanceof NotFoundError) throw networkError('NOT_FOUND', 'IPFS 路径不存在。')
-  if (error instanceof NoResolverError || error instanceof NotUnixFSError) throw networkError('UNSUPPORTED', '内容不是支持的 UnixFS 数据。')
-  if (error instanceof UnderReadError || error instanceof OverReadError) throw networkError('INTEGRITY', 'UnixFS 文件数据与长度不一致。')
-  if (error instanceof InvalidParametersError) throw networkError('INVALID_INPUT', '文件读取范围无效。')
-  throw networkError('UNSUPPORTED', '无法解释此 UnixFS 数据。')
+  rethrowCancellation(error, signal)
+  if (error instanceof GalleryDomainError) return error
+  if (error instanceof NotFoundError) return networkError('NOT_FOUND', 'IPFS 路径不存在。')
+  if (error instanceof NoResolverError || error instanceof NotUnixFSError) return networkError('UNSUPPORTED', '内容不是支持的 UnixFS 数据。')
+  if (error instanceof UnderReadError || error instanceof OverReadError) return networkError('INTEGRITY', 'UnixFS 文件数据与长度不一致。')
+  if (error instanceof InvalidParametersError) return networkError('INVALID_INPUT', '文件读取范围无效。')
+  return networkError('UNSUPPORTED', '无法解释此 UnixFS 数据。')
 }
 
 export function createContentReader(source: VerifiedBlockSource, options: { maxInputBytes: number }): ContentReader {
@@ -43,12 +46,12 @@ export function createContentReader(source: VerifiedBlockSource, options: { maxI
       async *get(cid, getOptions) {
         const blockSignal = getOptions?.signal === undefined ? controller.signal : AbortSignal.any([controller.signal, getOptions.signal])
         checkSignal(blockSignal)
-        if (inputBytes > maxInputBytes) throw networkError('LIMIT', '已验证解析输入超过上限。')
+        if (inputBytes > maxInputBytes) throw new InputBudgetExceededError('已验证解析输入超过上限。')
         parseBlockCid(cid.toString(), maxInputBytes)
         const block = await source.get(cid.toString(), blockSignal)
         checkSignal(blockSignal)
         inputBytes += block.byteLength
-        if (inputBytes > maxInputBytes) throw networkError('LIMIT', '已验证解析输入超过上限。')
+        if (inputBytes > maxInputBytes) throw new InputBudgetExceededError('已验证解析输入超过上限。')
         yield block
       },
     }
@@ -63,17 +66,20 @@ export function createContentReader(source: VerifiedBlockSource, options: { maxI
   }
 
   async function resolve(ref: ContentRef, op: ReturnType<typeof operation>): Promise<UnixFSEntry> {
-    const cid = parseBlockCid(ref.cid, maxInputBytes)
+    const cid = parseBlockCid(ref.cid, maxInputBytes).toV1()
     if (ref.path.length > 64 || ref.path.join('/').length > 4096 || ref.path.some((part) =>
       !part || part.length > 255 || part === '.' || part === '..' || hasUnsafePathCharacters(part),
     )) throw networkError('INVALID_INPUT', 'IPFS 路径无效。')
-    return exporter(ref.path.length ? `${cid}/${ref.path.join('/')}` : cid, op.storage, { signal: op.signal })
+    const path = ref.path.length ? `${cid}/${ref.path.join('/')}` : cid.toString()
+    const entry = await exporter(path, op.storage, { signal: op.signal })
+    if (ref.path.length && entry.path !== path) throw networkError('NOT_FOUND', 'IPFS 路径不存在。')
+    return entry
   }
 
   return {
     async stat(ref, signal) {
       const op = operation(signal)
-      try { return statEntry(await resolve(ref, op)) } catch (error) { return readerError(error, signal) } finally { op.close() }
+      try { return statEntry(await resolve(ref, op)) } catch (error) { throw readerError(error, signal) } finally { op.close() }
     },
     async *ls(ref, signal) {
       const op = operation(signal)
@@ -85,10 +91,19 @@ export function createContentReader(source: VerifiedBlockSource, options: { maxI
           if (!child.name || child.name.length > 255 || child.name === '.' || child.name === '..' || hasUnsafePathCharacters(child.name)) {
             throw networkError('UNSUPPORTED', 'UnixFS 目录包含无效名称。')
           }
-          const entry = await exporter(child.cid, op.storage, { signal: op.signal })
-          yield { name: child.name, ref: { cid: child.cid.toV1().toString(), path: [] }, ...statEntry(entry) }
+          const ref = { cid: child.cid.toV1().toString(), path: [] }
+          let stat: ContentStat
+          try {
+            stat = statEntry(await resolve(ref, op))
+          } catch (error) {
+            rethrowCancellation(error, signal)
+            if (isInputBudgetExceeded(error)) throw error
+            yield { name: child.name, ref, error: readerError(error, signal).error }
+            continue
+          }
+          yield { name: child.name, ref, ...stat }
         }
-      } catch (error) { readerError(error, signal) } finally { op.close() }
+      } catch (error) { throw readerError(error, signal) } finally { op.close() }
     },
     async *read(ref, readOptions) {
       const { signal, maxBytes, offset = 0, length } = readOptions
@@ -115,7 +130,7 @@ export function createContentReader(source: VerifiedBlockSource, options: { maxI
           yield chunk
         }
         if (BigInt(outputBytes) !== requested) throw networkError('INTEGRITY', 'UnixFS 文件数据与长度不一致。')
-      } catch (error) { readerError(error, signal) } finally { op.close() }
+      } catch (error) { throw readerError(error, signal) } finally { op.close() }
     },
   }
 }

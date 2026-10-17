@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createGalleryFixtures } from '../fixtures/unixfs'
 import type { GalleryFixtures } from '../fixtures/unixfs'
 import { createGatewayBroker } from '../../src/network/broker'
@@ -7,12 +7,25 @@ import type { VerifiedBlockSource } from '../../src/network/types'
 import { discoverGallery } from '../../src/core/gallery'
 import { readVerifiedAsset } from '../../src/core/media'
 import { DEFAULT_LIMITS } from '../../src/shared/limits'
+import { importer } from 'ipfs-unixfs-importer'
+import { createPng } from '../fixtures/media'
+import type { ContentRef, GalleryInput } from '../../src/shared/contracts'
 
 let fixtures: GalleryFixtures
+let smallHamt: ContentRef
 const sources: VerifiedBlockSource[] = []
 const options = () => ({ signal: new AbortController().signal, limits: { ...DEFAULT_LIMITS } })
 
-beforeAll(async () => { fixtures = await createGalleryFixtures() })
+beforeAll(async () => {
+  fixtures = await createGalleryFixtures()
+  for await (const entry of importer(fixtures.expected.hamtPaths.map((path, index) => ({ path, content: createPng(8, 8, index % 2) })), fixtures.store,
+    { cidVersion: 1, rawLeaves: true, wrapWithDirectory: true, shardSplitThresholdBytes: 64 })) {
+    if (entry.path === '') {
+      expect(entry.unixfs?.type).toBe('hamt-sharded-directory')
+      smallHamt = { cid: entry.cid.toV1().toString(), path: [] }
+    }
+  }
+})
 afterEach(() => { for (const source of sources.splice(0)) source.dispose() })
 
 function setup() {
@@ -27,7 +40,7 @@ function setup() {
     { fetch, now: () => Date.now(), random: () => 0 })
   sources.push(source)
   return {
-    discoveryReader: () => createContentReader(source, { maxInputBytes: DEFAULT_LIMITS.maxDiscoveryInputBytes }),
+    discoveryReader: (maxInputBytes = DEFAULT_LIMITS.maxDiscoveryInputBytes) => createContentReader(source, { maxInputBytes }),
     assetReader: () => createContentReader(source, { maxInputBytes: DEFAULT_LIMITS.maxAssetInputBytes }),
   }
 }
@@ -55,6 +68,21 @@ describe('core with standard UnixFS and CID-verified fixture blocks', () => {
     expect(new Set(result.items.map((item) => item.id)).size).toBe(20)
     expect(new Set(result.items.map((item) => item.ref.cid)).size).toBe(2)
     expect(result.partial).toBe(false)
+  })
+  it.each(['unixfs', 'cids'] as const)('retains verified HAMT media before the cumulative 5000-byte input limit (%s)', async (kind) => {
+    const { discoveryReader } = setup()
+    const reader = discoveryReader(5000)
+    const stat = vi.spyOn(reader, 'stat')
+    const input: GalleryInput = { source: kind === 'unixfs' ? { kind, ref: smallHamt, browse: true }
+      : { kind, refs: [smallHamt, fixtures.raw.ref], browse: true } }
+    const result = await discoverGallery(input, reader, options())
+    expect(result.items.length).toBeGreaterThan(0)
+    expect(result.items.length).toBeLessThan(20)
+    expect(result.partial).toBe(true)
+    expect(result.warnings).toContainEqual(expect.objectContaining({ code: 'LIMIT' }))
+    expect(result.items.map((item) => item.title)).toEqual(result.items.map((item) => item.title).sort())
+    for (const item of result.items) expect(fixtures.expected.hamtPaths).toContain(item.title)
+    expect(stat).toHaveBeenCalledTimes(1)
   })
   it('resolves extensionless parent-relative metadata and strict standalone file-CID metadata', async () => {
     const { discoveryReader, assetReader } = setup()

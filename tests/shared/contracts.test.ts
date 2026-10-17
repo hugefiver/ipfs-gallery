@@ -1,6 +1,6 @@
 import { expectTypeOf, it } from 'vitest'
 import type {
-  ContentEntry,
+  ContentListingEntry,
   ContentReader,
   ContentStat,
   DiscoveryOptions,
@@ -30,7 +30,7 @@ it('keeps the verified source and content reader interfaces independent of expor
     (ref: ContentRef, signal: AbortSignal) => Promise<ContentStat>
   >()
   expectTypeOf<ContentReader['ls']>().toEqualTypeOf<
-    (ref: ContentRef, signal: AbortSignal) => AsyncIterable<ContentEntry>
+    (ref: ContentRef, signal: AbortSignal) => AsyncIterable<ContentListingEntry>
   >()
   expectTypeOf<ContentReader['read']>().toEqualTypeOf<
     (ref: ContentRef, options: ReadOptions) => AsyncIterable<Uint8Array>

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { discoverGallery } from '../../src/core/gallery'
+import { InputBudgetExceededError } from '../../src/core/input-budget'
 import { readVerifiedAsset } from '../../src/core/media'
 import { DEFAULT_LIMITS } from '../../src/shared/limits'
 import { GalleryDomainError } from '../../src/shared/errors'
@@ -175,5 +176,133 @@ describe('reader-driven gallery discovery', () => {
     const reader = new MemoryReader().directory(ref(ROOT), [entry('a', ref(THIRD))])
     reader.read = async function* () { throw new DOMException('abort', 'AbortError'); yield PNG }
     await expect(discoverGallery(unixfs(true), reader, options())).rejects.toBeInstanceOf(GalleryDomainError)
+  })
+  it.each([false, true])('retains accepted media on a directory iterator failure (nested=%s)', async (nested) => {
+    const image = ref(THIRD), sub = ref(OTHER)
+    const reader = new MemoryReader().directory(ref(ROOT)).directory(sub).file(image, PNG)
+    reader.ls = async function* (target) {
+      if (nested && target.cid === ROOT) {
+        yield entry('nested', sub, 'directory')
+        yield entry('z', image)
+        return
+      }
+      yield entry('a', image)
+      throw new GalleryDomainError({ code: 'NETWORK', message: 'iterator failed', retryable: true })
+    }
+    const result = await discoverGallery(unixfs(true), reader, options())
+    expect(result.items.map((item) => item.title)).toEqual(nested ? ['a', 'z'] : ['a'])
+    expect(result.partial).toBe(true)
+    expect(result.warnings).toContainEqual(expect.objectContaining({ code: 'NETWORK', ref: nested ? sub : ref(ROOT) }))
+    expect(reader.reads).toHaveLength(nested ? 2 : 1)
+  })
+
+  it('skips failed entries without using their names as paths and counts them against the directory cap', async () => {
+    const memory = new MemoryReader().directory(ref(ROOT)).file(ref(THIRD), PNG).file(ref(OTHER), GIF)
+    const reader: ContentReader = memory
+    reader.ls = async function* () {
+      yield entry('a', ref(THIRD))
+      yield { name: 'bad', ref: ref(cid('bad')), error: { code: 'UNSUPPORTED', message: 'bad child', retryable: false } }
+      yield entry('c', ref(OTHER))
+    }
+    const result = await discoverGallery(unixfs(true), reader, options())
+    expect(result.items.map((item) => item.title)).toEqual(['a', 'c'])
+    expect(result.partial).toBe(true)
+    expect(result.warnings).toEqual([expect.objectContaining({ code: 'UNSUPPORTED', ref: ref(cid('bad')) })])
+    expect(memory.reads.map((call) => call.ref)).toEqual([ref(THIRD), ref(OTHER)])
+    const capped = await discoverGallery(unixfs(true), reader, { ...options(), limits: { ...DEFAULT_LIMITS, maxDirectoryEntries: 2 } })
+    expect(capped.items.map((item) => item.title)).toEqual(['a'])
+    expect(capped.warnings.map((warning) => warning.code)).toEqual(['UNSUPPORTED', 'LIMIT'])
+  })
+
+  it.each(['ls', 'read'])('stops parent siblings and later roots after cumulative input exhaustion in nested %s', async (stage) => {
+    const sub = ref(cid('sub')), failing = ref(cid('failing'))
+    const reader = new MemoryReader().directory(ref(ROOT), [entry('a', ref(THIRD)), entry('sub', sub, 'directory'), entry('z', ref(OTHER))])
+      .directory(sub, [entry('bad', failing)]).file(ref(THIRD), PNG).file(ref(OTHER), GIF)
+    const list = reader.ls.bind(reader)
+    let closed = false
+    reader.ls = async function* (target, signal) {
+      try {
+        if (target.cid === sub.cid && stage === 'ls') throw new InputBudgetExceededError('input exhausted')
+        yield* list(target, signal)
+      } finally { if (target.cid === ROOT) closed = true }
+    }
+    const read = reader.read.bind(reader)
+    reader.read = async function* (target, options) {
+      if (target.cid === failing.cid) throw new InputBudgetExceededError('input exhausted')
+      yield* read(target, options)
+    }
+    const result = await discoverGallery({ source: { kind: 'cids', refs: [ref(ROOT), ref(OTHER)], browse: true } }, reader, options())
+    expect(result.items.map((item) => item.title)).toEqual(['a'])
+    expect(result.partial).toBe(true)
+    expect(result.warnings.map((warning) => warning.code)).toEqual(['LIMIT'])
+    expect(reader.reads.map((call) => call.ref)).toEqual([ref(THIRD)])
+    expect(reader.stats).not.toContainEqual(ref(OTHER))
+    expect(closed).toBe(true)
+  })
+
+  it('stops later metadata probes and roots after cumulative input exhaustion', async () => {
+    const reader = new MemoryReader().file(ref(THIRD), PNG).directory(ref(ROOT)).file(ref(OTHER), GIF)
+    const stat = reader.stat.bind(reader)
+    const probes: string[] = []
+    reader.stat = async (target, signal) => {
+      if (target.path.length) {
+        probes.push(target.path.join('/'))
+        throw new InputBudgetExceededError('input exhausted')
+      }
+      return stat(target, signal)
+    }
+    const input: GalleryInput = { source: { kind: 'cids', refs: [ref(THIRD), ref(ROOT), ref(OTHER)], browse: false } }
+    const result = await discoverGallery(input, reader, options())
+    expect(result.items.map((item) => item.ref)).toEqual([ref(THIRD)])
+    expect(result).toMatchObject({ partial: true, warnings: [expect.objectContaining({ code: 'LIMIT' })] })
+    expect(probes).toEqual(['gallery.json'])
+    expect(reader.stats).not.toContainEqual(ref(OTHER))
+    await expect(discoverGallery(unixfs(), reader, options())).rejects.toMatchObject({ error: { code: 'LIMIT' } })
+  })
+
+  it('continues after a single-item LIMIT and after an item does not fit the remaining output budget', async () => {
+    const tooBig = ref(cid('too big')), rejected = ref(cid('rejected'))
+    const reader = new MemoryReader().directory(ref(ROOT), [
+      entry('a', ref(THIRD), 'file', BigInt(PNG.length)), entry('b', tooBig, 'file', 10_000n),
+      entry('c', rejected), entry('d', ref(OTHER), 'file', BigInt(GIF.length)),
+    ]).file(ref(THIRD), PNG).file(ref(OTHER), GIF)
+    const read = reader.read.bind(reader)
+    reader.read = async function* (target, options) {
+      if (target.cid === rejected.cid) throw new GalleryDomainError({ code: 'LIMIT', message: 'item limit', retryable: false })
+      yield* read(target, options)
+    }
+    const result = await discoverGallery(unixfs(true), reader, { ...options(), limits: { ...DEFAULT_LIMITS, maxDiscoveryInputBytes: PNG.length + GIF.length } })
+    expect(result.items.map((item) => item.title)).toEqual(['a', 'd'])
+    expect(result.partial).toBe(true)
+    expect(result.warnings.map((warning) => warning.code)).toEqual(['LIMIT', 'LIMIT'])
+    expect(reader.reads.map((call) => call.ref)).toEqual([ref(THIRD), ref(OTHER)])
+  })
+
+  it.each([false, true])('stops on the gallery cumulative output budget after accepting media (unknown size=%s)', async (unknown) => {
+    const reader = new MemoryReader().directory(ref(ROOT), [entry('a', ref(THIRD), 'file', unknown ? undefined : BigInt(PNG.length)),
+      entry('b', ref(OTHER), 'file', unknown ? undefined : BigInt(GIF.length)), entry('nested', ref(cid('unvisited')), 'directory')])
+      .file(ref(THIRD), PNG, !unknown).file(ref(OTHER), GIF, !unknown)
+    const result = await discoverGallery({ source: { kind: 'cids', refs: [ref(ROOT), ref(OTHER)], browse: true } }, reader,
+      { ...options(), limits: { ...DEFAULT_LIMITS, maxDiscoveryInputBytes: PNG.length + (unknown ? 1 : 0) } })
+    expect(result.items.map((item) => item.title)).toEqual(['a'])
+    expect(result.partial).toBe(true)
+    expect(result.warnings.map((warning) => warning.code)).toEqual(['LIMIT'])
+    expect(reader.listings).toEqual([ref(ROOT)])
+    expect(reader.stats).not.toContainEqual(ref(OTHER))
+    expect(reader.reads).toHaveLength(unknown ? 2 : 1)
+  })
+
+  it.each(['abort', 'cancel', 'signal'])('rejects %s after accepted media rather than returning a partial gallery', async (kind) => {
+    const controller = new AbortController()
+    const reader = new MemoryReader().directory(ref(ROOT)).file(ref(THIRD), PNG)
+    reader.ls = async function* () {
+      yield entry('a', ref(THIRD))
+      expect(reader.reads).toHaveLength(1)
+      if (kind === 'signal') controller.abort()
+      if (kind === 'abort') throw new DOMException('abort', 'AbortError')
+      throw new GalleryDomainError({ code: 'CANCELLED', message: 'cancelled', retryable: false })
+    }
+    await expect(discoverGallery(unixfs(true), reader, { ...options(), signal: controller.signal }))
+      .rejects.toMatchObject({ error: { code: 'CANCELLED' } })
   })
 })
