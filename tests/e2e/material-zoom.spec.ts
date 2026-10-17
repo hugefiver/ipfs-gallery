@@ -70,7 +70,7 @@ nativeZoomTest('2000x1125 actual Chrome150 is distinct from CSS zoom and native 
   expect(geometry.cssZoom).toBe('1'); expect(geometry.visualScale).toBe(1)
   expect(Math.abs(geometry.innerWidth - 2000 / 1.5)).toBeLessThanOrEqual(1)
   expect(geometry.surface.width).toBe(320)
-  await ui.menuButton(page).click()
+  await ui.closePanel(page).click()
   await expect(ui.dialog(page)).toHaveCount(0)
   await ui.menuButton(page).click()
   await expect(ui.dialog(page)).toHaveAccessibleName('菜单')

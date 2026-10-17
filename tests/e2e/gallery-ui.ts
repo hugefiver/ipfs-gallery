@@ -1,7 +1,7 @@
 import { expect, type Locator, type Page, type TestInfo } from '@playwright/test'
 
 type ToolPanel = 'source' | 'filters' | 'info' | 'network'
-const panelNames: Record<ToolPanel, RegExp> = { source: /^来源(?: · 部分内容可用)?$/, filters: /^搜索与筛选$/, info: /^当前影像信息$/, network: /^网络$/ }
+const panelNames: Record<ToolPanel, RegExp> = { source: /^来源(?: \(部分可用\))?$/, filters: /^搜索与筛选$/, info: /^当前影像信息$/, network: /^网络$/ }
 
 declare global {
   interface Window {
@@ -50,14 +50,15 @@ export const ui = {
   menuButton: (page: Page) => page.getByRole('button', { name: '菜单', exact: true }),
   dialog: (page: Page) => page.getByRole('dialog'),
   closePanel: (page: Page) => ui.dialog(page).getByRole('button', { name: /^关闭/ }).first(),
+  back: (page: Page) => ui.dialog(page).getByRole('button', { name: '返回上一级', exact: true }),
   panelAction: (page: Page, panel: ToolPanel) => ui.dialog(page).getByRole('button', { name: panelNames[panel] }),
   albumAction: (page: Page) => ui.dialog(page).getByRole('group', { name: '观看模式', exact: true }).getByRole('button', { name: /^相册(?: · 当前模式)?$/ }),
   readerAction: (page: Page) => ui.dialog(page).getByRole('group', { name: '观看模式', exact: true }).getByRole('button', { name: /^阅读(?: · 当前模式)?$/ }),
   source: (page: Page) => ui.dialog(page).getByRole('textbox', { name: 'CID 或 IPFS 地址', exact: true }),
   submit: (page: Page) => ui.dialog(page).getByRole('form', { name: '打开影像来源', exact: true }).getByRole('button', { name: '打开', exact: true }),
-  cancelSource: (page: Page) => page.getByRole('button', { name: '取消读取', exact: true }),
+  cancelSource: (page: Page) => ui.surface(page).getByRole('button', { name: '取消', exact: true }),
   filters: (page: Page) => ui.dialog(page).getByRole('region', { name: '筛选已读取影像', exact: true }),
-  search: (page: Page) => ui.filters(page).getByRole('searchbox', { name: '在已读取的影像中搜索', exact: true }),
+  search: (page: Page) => ui.filters(page).getByRole('searchbox', { name: '搜索', exact: true }),
   sort: (page: Page) => ui.filters(page).getByRole('combobox', { name: '排序', exact: true }),
   next: (page: Page) => page.getByRole('button', { name: '下一项', exact: true }),
   previous: (page: Page) => page.getByRole('button', { name: '上一项', exact: true }),

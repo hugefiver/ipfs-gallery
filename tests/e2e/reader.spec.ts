@@ -336,11 +336,11 @@ test('a hash-valid but undecodable PNG fails once, retries explicitly and downlo
   const failed = await mediaEvents(page)
   await page.waitForTimeout(350)
   expect(await mediaEvents(page)).toEqual(failed)
-  await ui.readerSurface(page).getByRole('button', { name: '重试原始媒体', exact: true }).click()
+  await ui.readerSurface(page).getByRole('button', { name: '重试加载', exact: true }).click()
   await expect.poll(async () => (await mediaEvents(page)).filter(event => event.type === 'error').length).toBe(2)
   await openReaderTools(page)
   await expectDownloadBytes(page, ui.readerTools(page), bytes)
-  await ui.menuButton(page).click()
+  await ui.closePanel(page).click()
   const notice = page.locator('.reader-state .reader-notice')
   await expect(notice).toBeVisible()
   await expect(notice).not.toBeEmpty()
@@ -350,7 +350,10 @@ test('a hash-valid but undecodable PNG fails once, retries explicitly and downlo
     let background = [0, 0, 0, 0]
     for (let parent: Element | null = element; parent; parent = parent.parentElement) {
       const color = rgb(getComputedStyle(parent).backgroundColor)
-      if ((color[3] ?? 1) === 1) { background = color; break }
+      const alpha = color[3] ?? 1
+      const remaining = 1 - background[3]!
+      background = [0, 1, 2].map(index => background[index]! + color[index]! * alpha * remaining).concat(background[3]! + alpha * remaining)
+      if (background[3]! >= 1) break
     }
     const luminance = (color: number[]) => color.slice(0, 3).map(channel => {
       const value = channel / 255

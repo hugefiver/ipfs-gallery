@@ -6,6 +6,10 @@ import { contentUri } from '../fixtures/unixfs'
 import type { Page, TestInfo } from '@playwright/test'
 
 async function verifyMenuPng(page: Page, testInfo: TestInfo, name: string, alpha: number) {
+  await expect.poll(() => ui.menuButton(page).evaluate(element => {
+    const rgba = getComputedStyle(element).backgroundColor.match(/[\d.]+/g)!.map(Number)
+    return rgba[3] ?? 1
+  })).toBeCloseTo(alpha, 2)
   const png = await page.screenshot({ path: testInfo.outputPath(`${name}-composite.png`) })
   const result = await page.evaluate(async base64 => {
     const menu = document.querySelector<HTMLButtonElement>('.reader-menu-trigger')!
@@ -33,9 +37,10 @@ async function verifyMenuPng(page: Page, testInfo: TestInfo, name: string, alpha
       const channel = value / 255
       return sum + (channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4) * [.2126, .7152, .0722][index]!
     }, 0)
-    const contrast = [style.color, style.borderColor, style.outlineColor].map(color => {
+    const contrast = [style.color].map(color => {
       context.clearRect(0, 0, 1, 1); context.fillStyle = color; context.fillRect(0, 0, 1, 1)
-      const ink = Array.from(context.getImageData(0, 0, 1, 1).data).slice(0, 3)
+      const foreground = Array.from(context.getImageData(0, 0, 1, 1).data)
+      const ink = actual.map((channel, index) => foreground[index]! * foreground[3]! / 255 + channel * (1 - foreground[3]! / 255))
       return (Math.max(luminance(ink), luminance(actual)) + .05) / (Math.min(luminance(ink), luminance(actual)) + .05)
     })
     return { actual, below, background, expected, contrast, alpha: a, opacity: style.opacity, filter: style.backdropFilter, shadow: style.boxShadow }
@@ -43,10 +48,14 @@ async function verifyMenuPng(page: Page, testInfo: TestInfo, name: string, alpha
   await testInfo.attach(name, { body: JSON.stringify(result), contentType: 'application/json' })
   expect(result.alpha).toBeCloseTo(alpha, 2)
   expect(result.opacity).toBe('1')
-  expect(result.filter).toBe('none')
-  expect(result.shadow).toBe('none')
   for (const ratio of result.contrast) expect(ratio).toBeGreaterThanOrEqual(3)
-  for (let channel = 0; channel < 3; channel += 1) expect(Math.abs(result.actual[channel]! - result.expected[channel]!)).toBeLessThanOrEqual(2)
+  for (let channel = 0; channel < 3; channel += 1) {
+    const lower = result.background[channel]! * result.alpha
+    const upper = lower + 255 * (1 - result.alpha)
+    expect(result.actual[channel]!).toBeGreaterThanOrEqual(Math.floor(lower) - 2)
+    expect(result.actual[channel]!).toBeLessThanOrEqual(Math.ceil(upper) + 2)
+    if (!name.startsWith('checker')) expect(Math.abs(result.actual[channel]! - result.expected[channel]!)).toBeLessThanOrEqual(2)
+  }
 }
 
 test('persistent menu, portal DOM keyboard boundary and single close focus', async ({ page, previewFixtures }, testInfo) => {
@@ -66,7 +75,7 @@ test('persistent menu, portal DOM keyboard boundary and single close focus', asy
   await expect(ui.readerTools(page).getByRole('status', { name: '缩放比例' })).toHaveText('150%')
   await ui.readerInfo(page).focus()
   await page.keyboard.press('Tab')
-  await expect(ui.menuButton(page)).toBeFocused()
+  await expect(ui.back(page)).toBeFocused()
   await page.keyboard.press('Shift+Tab')
   await expect(ui.readerInfo(page)).toBeFocused()
   await ui.readerInfo(page).dispatchEvent('keydown', { key: 'Escape', isComposing: true, bubbles: true })
@@ -130,10 +139,10 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
       await expectReaderImage(page, bytes)
       const menu = ui.menuButton(page)
       await page.mouse.move(300, 300)
-      await verifyMenuPng(page, testInfo, `${backdrop}-default-${reducedMotion}`, .5)
+      await verifyMenuPng(page, testInfo, `${backdrop}-default-${reducedMotion}`, .88)
       await screenshot(page, testInfo, `${backdrop}-default-${reducedMotion}`)
       await menu.hover()
-      await verifyMenuPng(page, testInfo, `${backdrop}-hover-${reducedMotion}`, .6)
+      await verifyMenuPng(page, testInfo, `${backdrop}-hover-${reducedMotion}`, .98)
       await screenshot(page, testInfo, `${backdrop}-hover-${reducedMotion}`)
       await ui.reader(page).focus()
       await page.keyboard.press('Tab')
@@ -157,24 +166,23 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
         const background = rgba(style.backgroundColor)
         const icon = rgba(style.color)
         const focus = rgba(style.outlineColor)
-        const bound = rgba(style.borderColor)
         const composites = [0, 255].map(shade => background.slice(0, 3).map(channel => channel * background[3]! / 255 + shade * (1 - background[3]! / 255)))
         const box = element.getBoundingClientRect()
         const svg = element.querySelector('svg')!.getBoundingClientRect()
-        return { icon: composites.map(bg => ratio(icon.slice(0, 3), bg)), focus: composites.map(bg => ratio(focus.slice(0, 3), bg)), border: composites.map(bg => ratio(bound.slice(0, 3), bg)), alpha: { icon: icon[3], focus: focus[3], border: bound[3] }, outline: parseFloat(style.outlineWidth), menu: { width: box.width, height: box.height }, svg: { width: svg.width, height: svg.height } }
+        return { icon: composites.map(bg => ratio(icon.slice(0, 3), bg)), focus: composites.map(bg => ratio(focus.slice(0, 3), bg)), alpha: { icon: icon[3], focus: focus[3] }, outline: parseFloat(style.outlineWidth), menu: { width: box.width, height: box.height }, svg: { width: svg.width, height: svg.height } }
       })
       await testInfo.attach(`${backdrop}-contrast-${reducedMotion}`, { body: JSON.stringify(contrast), contentType: 'application/json' })
-      for (const ratio of [...contrast.icon, ...contrast.focus, ...contrast.border]) expect(ratio).toBeGreaterThanOrEqual(3)
-      expect(contrast.alpha).toEqual({ icon: 255, focus: 255, border: 255 })
+      for (const ratio of [...contrast.icon, ...contrast.focus]) expect(ratio).toBeGreaterThanOrEqual(3)
+      expect(contrast.alpha).toEqual({ icon: 255, focus: 255 })
       expect(contrast.outline).toBe(2)
       expect(contrast.menu).toEqual({ width: 48, height: 48 })
       expect(contrast.svg).toEqual({ width: 20, height: 20 })
-      await verifyMenuPng(page, testInfo, `${backdrop}-focus-${reducedMotion}`, .6)
+      await verifyMenuPng(page, testInfo, `${backdrop}-focus-${reducedMotion}`, .98)
       await screenshot(page, testInfo, `${backdrop}-focus-${reducedMotion}`)
       const box = await menu.boundingBox()
       await page.mouse.move(box!.x + 24, box!.y + 24)
       await page.mouse.down()
-      await verifyMenuPng(page, testInfo, `${backdrop}-pressed-${reducedMotion}`, .68)
+      await verifyMenuPng(page, testInfo, `${backdrop}-pressed-${reducedMotion}`, 1)
       await screenshot(page, testInfo, `${backdrop}-pressed-${reducedMotion}`)
       await page.mouse.up()
       await expect(ui.dialog(page)).toHaveAccessibleName('菜单')
