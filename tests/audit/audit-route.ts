@@ -60,6 +60,7 @@ export interface AuditRun {
   preset: AuditPreset
   run: number
   scores: AuditScores
+  lcpMs: number
   warnings: string[]
   failingAudits: { id: string; score: number | null; title: string; displayValue?: string }[]
   react: ReactScanEvidence
@@ -168,6 +169,8 @@ export async function auditRoute(options: {
       await waitForOwnedAudit(writeFile(join(options.outputDir, `${name}.html`), measured.html), signal)
       await waitForOwnedAudit(writeFile(join(options.outputDir, `${name}.json`), measured.json), signal)
       if (result.lhr.runtimeError) throw new Error(`Lighthouse runtime failure: ${result.lhr.runtimeError.code}`)
+      const lcpMs = result.lhr.audits['largest-contentful-paint']?.numericValue
+      if (typeof lcpMs !== 'number' || !Number.isFinite(lcpMs) || lcpMs <= 0) throw new Error('Lighthouse omitted a valid numeric LCP measurement')
       if (result.lhr.finalDisplayedUrl !== options.url) throw new Error('Lighthouse measured a different top-level page')
       if (!measurement || !react) throw new Error('Lighthouse did not produce document-bound target evidence')
       const scores = Object.fromEntries(AUDIT_CATEGORIES.map((category) => {
@@ -179,6 +182,7 @@ export async function auditRoute(options: {
         preset: options.preset,
         run,
         scores,
+        lcpMs,
         warnings: result.lhr.runWarnings ?? [],
         failingAudits: Object.entries(result.lhr.audits)
           .filter(([, audit]) => audit.score !== null && audit.score < 1)

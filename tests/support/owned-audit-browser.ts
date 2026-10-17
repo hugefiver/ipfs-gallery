@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import { lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { setTimeout as delay } from 'node:timers/promises'
 import { chromium, type BrowserContext, type Page } from 'playwright'
 
-export const AUDIT_TEMP_PARENT = 'C:\\Users\\HUGEFI~1\\AppData\\Local\\Temp\\opencode'
+export const AUDIT_TEMP_PARENT = tmpdir()
 const OWNER_MARKER = '.ocmm-run-owner'
 export const OWNED_CLOSE_BUDGET_MS = 35_000
 

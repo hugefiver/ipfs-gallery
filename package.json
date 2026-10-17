@@ -21,7 +21,8 @@
     "test:deployment": "playwright test --config playwright.deployment.config.ts",
     "lint": "eslint . --max-warnings 0",
     "doctor:react": "react-doctor src --verbose --no-telemetry --no-supply-chain",
-    "audit:browser": "playwright test --config playwright.audit.config.ts"
+    "audit:browser": "playwright test --config playwright.audit.config.ts",
+    "audit:support": "playwright test --config tests/audit/support.config.ts"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
