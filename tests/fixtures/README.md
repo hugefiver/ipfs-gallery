@@ -17,7 +17,13 @@ ffmpeg -hide_banner -loglevel error -f lavfi -i "color=c=0x5c633f:s=32x24:r=4:d=
 
 `startTrustlessGateway(blocks, mode?)` in `../support/trustless-gateway.ts` binds an assigned loopback port, serves only individual `format=raw` blocks with the proper `Accept` header, records request headers/status/abort/count/concurrency, and supports correct, corrupt, 404, 429, and delayed responses. `setBlockMode` overrides one CID. Call `close()` in `finally`.
 
-Playwright's `../e2e/gateway-route.ts` maps only `https://slow.gallery-fixture.net/ipfs/**` and its fast equivalent to those owned HTTP servers using Node fetch. These syntactically public HTTPS gateway URLs are checked by the production gateway normalizer. The bridge fulfills the exact server status, headers, and bytes. Neither Worker RPC nor gallery/asset results are mocked. Unexpected external requests are aborted in both the browser probe and app E2E fixtures; fixture-domain requests never reach the actual network.
+Application E2E uses the real Service Worker and a fail-closed proxy from `../support/sw-allowlist-proxy.ts`. Explicit public-format router, provider and gateway authorities map to test-owned loopback listeners; unknown destinations are rejected without external DNS or connections. `sw-https-fixtures.ts` provides bounded delegated-routing and raw-block HTTPS responses. `ipfs-provider.ts` uses the official Helia/libp2p stack to serve real Noise/Yamux/Bitswap over WSS, with observable wants, cancellation and bytes. Neither Worker RPC nor gallery/asset results are mocked.
+
+Use the test certificate and its exact Chromium SPKI trust argument from `sw-test-tls.ts` and `sw-tls.ts`; do not disable certificate checks globally or change the system trust store. Close every owned service in `finally`. Production provider/gateway validation remains enabled: local listeners are reachable only through the test proxy's explicit mappings, not through a hostname, port or webdriver bypass in product code.
+
+The direct retrieval case denies gateway access and compares rendered/downloaded bytes with the original fixture. HTTPS-provider and gateway-fallback cases are separate: their success does not prove Bitswap retrieval. Cancellation evidence must come from the application's operation and the provider's received protocol messages, not a manually injected cancel frame. A successful same-origin ticket fetch establishes SW admission, not the provenance of arbitrary HTTP body bytes; admitted bytes travel through the binding's private one-shot response and fixed Worker relay.
+
+Build-policy coverage uses separately compiled strict and trusted-gateway variants, never a runtime mode override. Strict builds reject wrong-hash gateway blocks; trusted-gateway builds may admit those blocks only from the configured gateway branch. Dynamic HTTP providers and Bitswap remain strict in both variants, including a provider sharing a gateway hostname. Compare actual media and download bytes, verify that digest-exempt results do not populate the verified cache, and reject mismatched realm policies. Source mutation after SW admission must not change the owned snapshot delivered later.
 
 Run infrastructure checks without an app build:
 
@@ -25,7 +31,7 @@ Run infrastructure checks without an app build:
 pnpm exec vitest run tests/fixtures
 ```
 
-The browser check uses a newly owned Chromium browser and empty context to decode all media and prove dedicated Worker HTTPS requests are intercepted by `context.route`. An installed Playwright Chromium is required; the test does not install it.
+The fixture browser check uses a newly owned Chromium browser and empty context to decode PNG/WebM media without content-network requests. It does not exercise the application transport; application E2E provides that coverage. An installed Playwright Chromium is required; tests do not install it.
 
 Run app E2E against the isolated production build, without replacing `dist/` or using the regular preview on port 4173:
 
