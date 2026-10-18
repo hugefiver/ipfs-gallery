@@ -160,8 +160,8 @@ video.reader-media:focus-visible { outline: var(--focus-width) solid var(--text-
   overflow-wrap: anywhere;
 }
 .reader-state p:last-child { margin-bottom: 0; }
-.reader-state .error-detail { color: var(--text-on-dark); overflow-wrap: anywhere; }
+.reader-state .error-detail { color: var(--status-error); overflow-wrap: anywhere; }
 .reader-state .error-detail .cid { font-family: var(--font-cid); font-size: var(--type-meta); }
 .reader-state-actions { gap: var(--overlay-gap); margin-top: var(--space-4); padding: var(--space-1); }
 .reader-notice { flex-basis: 100%; margin: 0; padding: var(--space-1) var(--space-2); color: var(--text-secondary); font-size: var(--type-meta); line-height: 1.6; overflow-wrap: anywhere; }
-.reader-state .reader-notice { color: var(--text-on-dark); }
+.reader-state .reader-notice { color: var(--text-primary); }

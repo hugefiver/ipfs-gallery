@@ -71,7 +71,7 @@ details ul { margin: 0; padding-left: var(--space-6); }
   padding: 0;
   border: 1px solid rgba(255, 255, 255, 0.6) !important;
   border-radius: var(--radius-control);
-  background: rgba(255, 255, 255, 0.88) !important;
+  background: var(--surface-reader-menu) !important;
   backdrop-filter: blur(36px) saturate(190%) !important;
   -webkit-backdrop-filter: blur(36px) saturate(190%) !important;
   color: var(--text-primary) !important;
@@ -80,12 +80,12 @@ details ul { margin: 0; padding-left: var(--space-6); }
   transition: background-color 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease;
 }
 .reader-menu-trigger.MuiButton-root:hover, .reader-menu-trigger.MuiButton-root:focus-visible {
-  background: rgba(255, 255, 255, 0.98) !important;
+  background: var(--surface-reader-menu-hover) !important;
   transform: translateY(-1px);
   box-shadow: 0 6px 20px -2px rgba(0, 0, 0, 0.22) !important;
 }
 .reader-menu-trigger.MuiButton-root:active {
-  background: #FFFFFF !important;
+  background: var(--surface-reader-menu-pressed) !important;
   transform: translateY(0);
 }
 .reader-menu-trigger.MuiButton-root:focus-visible { outline: var(--focus-width) solid var(--accent-primary); outline-offset: var(--focus-offset); }
@@ -448,6 +448,11 @@ details ul { margin: 0; padding-left: var(--space-6); }
   background: var(--accent-soft);
   font-weight: 600;
 }
+.mode-options label:has(input:focus-visible), .type-options label:has(input:focus-visible) {
+  outline: var(--focus-width) solid var(--accent-primary);
+  outline-offset: -2px;
+  z-index: 1;
+}
 .mode-options input[type="radio"], .type-options input[type="radio"] {
   position: absolute;
   opacity: 0;
@@ -627,80 +632,9 @@ details ul { margin: 0; padding-left: var(--space-6); }
 
 @keyframes overlay-reveal { from { opacity: 0; } to { opacity: 1; } }
 
-/* Desktop Centered Dialog Card Mode & Mobile Fullscreen */
 @media (min-width: 768px) {
   .source-row { flex-direction: row; align-items: start; }
   .search-field { flex: 1 1 var(--measure-copy); }
-  .app-shell:not([data-test-automated]) .gallery-drawer.is-card-mode .gallery-drawer-paper.MuiDrawer-paper {
-    top: 50% !important;
-    left: 50% !important;
-    bottom: auto !important;
-    right: auto !important;
-    transform: translate(-50%, -50%) !important;
-    width: min(600px, 92vw) !important;
-    max-width: 92vw !important;
-    height: auto !important;
-    max-height: 85vh !important;
-    border-radius: var(--radius-panel) !important;
-    overflow: hidden !important;
-    background: transparent !important;
-    box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.4), 0 0 1px rgba(0, 0, 0, 0.2) !important;
-  }
-  .app-shell:not([data-test-automated]) .gallery-drawer.is-card-mode .gallery-drawer-surface {
-    position: relative !important;
-    height: auto !important;
-    max-height: 85vh !important;
-    border-radius: var(--radius-panel) !important;
-    border-right: none !important;
-    border: 1px solid rgba(255, 255, 255, 0.6) !important;
-    background: rgba(255, 255, 255, 0.88) !important;
-    backdrop-filter: blur(28px) saturate(190%) !important;
-    -webkit-backdrop-filter: blur(28px) saturate(190%) !important;
-  }
-  .app-shell:not([data-test-automated]) .gallery-drawer.is-card-mode .gallery-drawer-toolbar {
-    border-radius: var(--radius-panel) var(--radius-panel) 0 0 !important;
-  }
-}
-@media (max-width: 767px) {
-  .app-shell:not([data-test-automated]) .gallery-drawer.is-card-mode .gallery-drawer-paper.MuiDrawer-paper {
-    top: 0 !important;
-    left: 0 !important;
-    right: 0 !important;
-    bottom: 0 !important;
-    width: 100vw !important;
-    max-width: 100vw !important;
-    height: 100vh !important;
-    max-height: 100vh !important;
-    border-radius: 0 !important;
-  }
-  .app-shell:not([data-test-automated]) .gallery-drawer.is-card-mode .gallery-drawer-surface {
-    height: 100vh !important;
-    max-height: 100vh !important;
-    border-radius: 0 !important;
-    background: rgba(255, 255, 255, 0.95) !important;
-  }
-}
-
-/* Automated Test Compatibility Hook for E2E Suite */
-.app-shell[data-test-automated="true"] {
-  --surface-paper: #FAF9F5;
-  --surface-viewer: #181715;
-  --surface-overlay: #FAF9F5;
-  --surface-overlay-backdrop: transparent;
-  --surface-reader-menu: color-mix(in srgb, var(--surface-paper) 50%, transparent);
-  --surface-reader-menu-hover: color-mix(in srgb, var(--surface-paper) 60%, transparent);
-  --surface-reader-menu-pressed: color-mix(in srgb, var(--surface-paper) 68%, transparent);
-  --radius-control: 4px;
-  --radius-panel: 8px;
-}
-.app-shell[data-test-automated="true"] .gallery-drawer-surface {
-  background: #FAF9F5 !important;
-  backdrop-filter: none !important;
-  border-radius: 0px !important;
-}
-.app-shell[data-test-automated="true"] .reader-menu-trigger.MuiButton-root {
-  border: 1px solid var(--text-primary) !important;
-  box-shadow: none !important;
 }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; } }

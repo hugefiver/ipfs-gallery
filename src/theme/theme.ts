@@ -28,7 +28,7 @@ export const galleryTheme = createTheme({
     }, outlined: { borderColor: 'var(--border-control)', backgroundColor: 'var(--surface-paper)', color: 'var(--text-primary)', '&:hover': { backgroundColor: 'var(--surface-soft)', borderColor: 'var(--text-primary)' } },
     contained: { color: 'var(--text-on-accent)', backgroundColor: 'var(--accent-primary)', boxShadow: 'var(--elevation-2)', '&:hover': { backgroundColor: 'var(--accent-pressed)', boxShadow: 'var(--elevation-4)' }, '&:active': { boxShadow: 'var(--elevation-8)' } },
     text: { '&:hover': { backgroundColor: 'var(--surface-soft)' } } } },
-    MuiBackdrop: { styleOverrides: { root: { backgroundColor: 'rgba(0, 0, 0, 0.5) !important', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)' } } },
+    MuiBackdrop: { styleOverrides: { root: { backgroundColor: 'var(--surface-overlay-backdrop) !important', backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)' } } },
     MuiDialog: { styleOverrides: { paper: { boxShadow: 'none', borderRadius: 'var(--radius-panel)', border: 'var(--border-width) solid var(--border-subtle)' } } },
   },
 })

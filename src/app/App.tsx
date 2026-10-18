@@ -271,7 +271,7 @@ export default function App() {
     : !location.input ? <StatePanel title="打开一个影像来源"><p>输入 CID 或 IPFS 链接开始浏览。</p><Action onClick={() => openPanel('source')}>打开来源</Action></StatePanel> : null
 
   return <ThemeProvider theme={galleryTheme}>
-    <div className="app-shell" inert={!!panel} data-test-automated={isAutomated ? 'true' : undefined}>
+    <div className="app-shell" inert={!!panel}>
       <main className="gallery-main" ref={main} tabIndex={0} aria-label={mode === 'reader' ? '影像阅读区' : '影像相册'} aria-describedby="gallery-instructions" aria-busy={sourcePending}
         onKeyDown={event => { if (!event.defaultPrevented && event.target === event.currentTarget && event.key === 'Enter' && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); if (mode === 'reader') openPanel('menu'); else toggleChrome() } }}>
         <p id="gallery-instructions" className="sr-only">{mode === 'reader' ? '按Enter或M打开菜单，Tab进入持续菜单。Escape关闭面板并返回菜单，左右键在阅读区翻页。' : '按Enter或M显示或隐藏工具，Tab显示工具并进入菜单，Escape关闭面板或隐藏工具。'}</p>
@@ -281,7 +281,7 @@ export default function App() {
       </main>
     </div>
     {!panel && (mode === 'reader' || chromeVisible) && <GalleryChrome mode={mode} menuOpen={false} onMenu={() => openPanel('menu')} onHide={hideChrome} />}
-    <GalleryDrawer open={!!panel} onClose={closePanel} onBack={onDrawerBack} isSubpanel={panel !== 'menu' && !!panel} cardMode={panel === 'network'} title={paintPanel ? panelTitles[paintPanel] : '工具面板'} labelledBy="gallery-panel-title" focusKey={panel} focusTarget={panel === 'source' ? '#source-input' : panel === 'filters' ? 'input[type="search"]' : panel === 'menu' ? '.gallery-menu button' : undefined}>
+    <GalleryDrawer open={!!panel} onClose={closePanel} onBack={onDrawerBack} isSubpanel={panel !== 'menu' && !!panel} title={paintPanel ? panelTitles[paintPanel] : '工具面板'} labelledBy="gallery-panel-title" focusKey={panel} focusTarget={panel === 'source' ? '#source-input' : panel === 'filters' ? 'input[type="search"]' : panel === 'menu' ? '.gallery-menu button' : undefined}>
       {paintPanel === 'menu' && <><GalleryMenu mode={mode} hasItem={!!activeItem} hasSource={!!location.input && !invalidInput} partial={!!result?.partial} warningCount={result?.warnings.length ?? 0} onMode={changeMode} onPanel={openPanel} onDownload={openReaderTools} onShare={share} />{currentNotice && <p className="panel-notice" role="status">{currentNotice}</p>}{copyFallback && <p className="cid">{copyFallback}</p>}</>}
       {panel === 'readerTools' && mode === 'reader' && activeItem && <div ref={publishToolsHost} data-reader-tools-host />}
       {paintPanel === 'readerTools' && <div ref={publishToolsPaintHost} className="reader-tools-exit-paint" hidden={panel === 'readerTools'} aria-hidden="true" inert />}

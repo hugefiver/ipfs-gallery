@@ -17,8 +17,8 @@ const FixedMenuSlide = forwardRef<HTMLDivElement, Omit<SlideProps, 'children'> &
   return cloneElement(children, { ref: mergedRef, children: [toggle, <Slide key="sidebar" {...transition} easing="var(--ease-feedback)">{content as ReactElement}</Slide>] })
 })
 
-export function GalleryDrawer({ open, onClose, onBack, isSubpanel, cardMode, title, labelledBy, focusKey, focusTarget, children }: {
-  open: boolean; onClose: () => void; onBack?: () => void; isSubpanel?: boolean; cardMode?: boolean; title: string; labelledBy: string; focusKey: string | null; focusTarget?: string; children: ReactNode
+export function GalleryDrawer({ open, onClose, onBack, isSubpanel, title, labelledBy, focusKey, focusTarget, children }: {
+  open: boolean; onClose: () => void; onBack?: () => void; isSubpanel?: boolean; title: string; labelledBy: string; focusKey: string | null; focusTarget?: string; children: ReactNode
 }) {
   const [paper, setPaper] = useState<HTMLDivElement | null>(null)
   const reduceMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
@@ -52,7 +52,7 @@ export function GalleryDrawer({ open, onClose, onBack, isSubpanel, cardMode, tit
     element.addEventListener('keydown', onKey)
     return () => element.removeEventListener('keydown', onKey)
   }, [open, onClose, paper])
-  return <Drawer open={open} anchor="left" variant="temporary" elevation={0} className={`gallery-drawer${open ? '' : ' is-closed'}${cardMode ? ' is-card-mode' : ''}`} slots={{ transition: FixedMenuSlide }}
+  return <Drawer open={open} anchor="left" variant="temporary" elevation={0} className={`gallery-drawer${open ? '' : ' is-closed'}`} slots={{ transition: FixedMenuSlide }}
     transitionDuration={reduceMotion ? 0 : duration}
     ModalProps={{ keepMounted: true, disableRestoreFocus: true, closeAfterTransition: false }}
     onClose={(_event, reason) => { if (reason === 'backdropClick') onClose() }}
