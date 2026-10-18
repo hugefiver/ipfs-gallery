@@ -9,4 +9,10 @@ export default defineConfig(base, {
   timeout: 120_000,
   outputDir: './test-results/smoke',
   reporter: [['list']],
+  webServer: {
+    command: 'pnpm run preview:reader-album',
+    url: 'http://127.0.0.1:4183',
+    reuseExistingServer: false,
+    timeout: 30_000,
+  },
 })

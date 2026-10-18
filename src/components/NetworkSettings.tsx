@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { PlusIcon, XIcon, ArrowCounterClockwiseIcon } from '@phosphor-icons/react'
 import type { GatewayStat, ParsedLocation } from '../shared/contracts'
+import { BUILD_POLICY } from '../shared/build-policy'
 import { DEFAULT_GATEWAYS } from '../shared/gateways'
 import { DEFAULT_LIMITS } from '../shared/limits'
 import { parseLocation, serializeLocation } from '../core/query'
@@ -91,7 +92,7 @@ export function NetworkSettings({ open, location, stats, preferences, effectiveG
         return <li key={url}><strong className="cid">{url}</strong><span>{status}</span>{stat && <span>成功 {stat.successes} · 失败 {stat.failures} · 在途 {stat.inFlight}{stat.ewmaMs === undefined ? '' : ` · 延迟 ${Math.round(stat.ewmaMs)} ms`}</span>}</li>
       })}</ul>
     </section>
-    <div className="privacy-note"><p>所有影像均在浏览器端进行内容哈希校验，仅通过 HTTPS 安全网关传输。</p></div>
+    <div className="privacy-note"><p>{BUILD_POLICY.trustless ? '所有影像均在浏览器端进行内容哈希校验。' : '本构建信任当前配置的 HTTPS 网关，不比较其返回块与 CID 的内容哈希；网关可替换清单、目录或媒体内容。动态发现的 WSS／HTTPS provider 仍执行 CID 哈希校验。'}读取时由 Service Worker 优先尝试动态发现的 WSS／HTTPS provider，再回退到配置的 HTTPS 网关。</p></div>
     <footer className="actions"><Action variant="contained" onClick={() => apply()}>应用并重新读取</Action><Action onClick={close}>取消</Action></footer>
   </div>
 }

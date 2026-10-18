@@ -3,9 +3,9 @@
   "compilerOptions": {
     "composite": true,
     "tsBuildInfoFile": "./node_modules/.cache/tsconfig.test.tsbuildinfo",
-    "lib": ["ES2023", "DOM", "DOM.Iterable", "WebWorker"],
+    "lib": ["ES2023", "ES2024.Promise", "DOM", "DOM.Iterable", "WebWorker"],
     "jsx": "react-jsx",
     "types": ["node", "vite/client"]
   },
-  "include": ["tests", "src"]
+  "include": ["tests", "src", "build", "vite.config.ts"]
 }

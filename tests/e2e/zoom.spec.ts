@@ -6,7 +6,7 @@ import { mkdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname } from 'node:path'
 
 const browserZoomTest = test.extend({
-  context: async ({ playwright, headless }, use, testInfo) => {
+  context: async ({ playwright, headless, network }, use, testInfo) => {
     const profile = testInfo.outputPath('owned-browser-profile')
     const receipt = testInfo.outputPath('owned-browser.json')
     await writeFile(receipt, JSON.stringify({ profile, owner: testInfo.testId, closed: false }))
@@ -14,8 +14,8 @@ const browserZoomTest = test.extend({
     let context: BrowserContext | undefined
     try {
       context = await playwright.chromium.launchPersistentContext(profile, {
-        channel: 'chrome', headless, serviceWorkers: 'block',
-        args: ['--disable-extensions', '--disable-sync'],
+        channel: 'chrome', headless, serviceWorkers: 'allow', baseURL: network.baseURL,
+        args: ['--disable-extensions', '--disable-sync', ...network.chromiumArgs],
       })
       await use(context)
     }
@@ -280,7 +280,8 @@ test('album and all tool panels reflow at 200% without clipping close or recover
   await enterAlbum(page)
   await expectNoHorizontalOverflow(page)
   const last = ui.tile(page, previewFixtures.items.at(-1)!.title)
-  await last.scrollIntoViewIfNeeded()
+  await last.focus()
+  await expect(last).toBeFocused()
   for (const item of previewFixtures.items.slice(-6)) await expectImageBytes(ui.tileImage(page, item.title), item.thumbnail.bytes)
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
   const album = ui.album(page)

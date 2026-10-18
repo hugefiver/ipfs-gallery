@@ -102,6 +102,7 @@ export async function auditRoute(options: {
   verifyPage?: (page: Page) => Promise<void>
   preparePage?: (page: Page) => Promise<void>
   signal?: AbortSignal
+  launch?: (signal: AbortSignal) => Promise<OwnedAuditBrowser>
 }): Promise<RouteAudit> {
   const url = new URL(options.url)
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Audit requires a top-level HTTP(S) page, not an opaque iframe')
@@ -118,7 +119,7 @@ export async function auditRoute(options: {
     const errors: unknown[] = []
     const name = `${options.preset}-${run}`
     try {
-      owned = await launchOwnedAuditBrowser(signal)
+      owned = await (options.launch ?? launchOwnedAuditBrowser)(signal)
       const browser = owned
       await waitForOwnedAudit(writeFile(join(options.outputDir, `${name}-owned-browser.json`), JSON.stringify({ runRoot: browser.runRoot, port: browser.port }, null, 2)), signal)
       disposeRoutes = await waitForOwnedAudit(Promise.resolve(options.install?.(browser.context)), signal)

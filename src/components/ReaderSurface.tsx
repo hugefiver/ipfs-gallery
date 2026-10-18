@@ -2,6 +2,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type PointerEvent 
 import { createPortal } from 'react-dom'
 import { ArrowLeftIcon, ArrowRightIcon, ArrowsInIcon, CopyIcon, DownloadSimpleIcon, InfoIcon, MinusIcon, PlusIcon } from '@phosphor-icons/react'
 import type { ReaderSurfaceProps } from '../app/readerAlbumTypes'
+import { BUILD_POLICY } from '../shared/build-policy'
 import { clampReaderPan, clampReaderZoom, ignoresReaderInteraction, ReaderGestureTracker, READER_ZOOM, type ReaderSize, type ReaderTransform } from '../hooks/readerInteraction'
 import { contentAddress } from '../app/format'
 import { ReaderDownloadScope } from './readerDownload'
@@ -265,7 +266,7 @@ function ReaderSession({ item, items, asset: binding, service, sessionId, toolsH
       {error ? <><h2>媒体读取失败</h2><ErrorDetail error={error} /></>
         : failed ? <><h2>无法解码此媒体</h2><p role="alert">该媒体暂无法直接显示，但可直接下载。</p></>
           : unavailable ? <><h2>媒体暂不可用</h2><p role="alert">媒体读取服务未就绪。</p></>
-            : <p role="status">{asset ? '正在准备显示…' : '正在加载与校验媒体…'}</p>}
+            : <p role="status">{asset ? '正在准备显示…' : (BUILD_POLICY.trustless ? '正在加载与校验媒体…' : '正在加载与检查媒体…')}</p>}
       {(error || failed || unavailable) && <div className="reader-state-actions">
         <button type="button" disabled={modalOpen || unavailable} onClick={retry}>重试加载</button>
         {asset && <button type="button" disabled={modalOpen || downloading} onClick={() => void download()}>下载原文件</button>}
@@ -289,13 +290,13 @@ function ReaderSession({ item, items, asset: binding, service, sessionId, toolsH
         <button type="button" aria-label="复位图片" disabled={!decoded || transform.scale === 1} onClick={() => zoom(1, true)}><ArrowsInIcon aria-hidden="true" /></button>
       </div>}
       <div className="reader-tool-row" role="group" aria-label="当前媒体操作">
-        <button type="button" aria-label="下载经过验证的原始媒体" disabled={!asset || unavailable || downloading} onClick={() => void download(true)}><DownloadSimpleIcon aria-hidden="true" /><span>下载</span></button>
+        <button type="button" aria-label={BUILD_POLICY.trustless ? '下载经过验证的原始媒体' : '下载原始媒体'} disabled={!asset || unavailable || downloading} onClick={() => void download(true)}><DownloadSimpleIcon aria-hidden="true" /><span>下载</span></button>
         <button type="button" aria-label="复制 CID" onClick={() => void copy(item.ref.cid, ' CID')}><CopyIcon aria-hidden="true" /><span>CID</span></button>
         <button type="button" aria-label="复制原始地址" onClick={() => void copy(contentAddress(item.ref), '原始地址')}>地址</button>
         <button type="button" aria-label="影像详情" onClick={onOpenInfo}><InfoIcon aria-hidden="true" /><span>信息</span></button>
       </div>
       {notice && <p className="reader-notice" role="status">{notice}</p>}
-      {!asset && <p className="reader-notice">{error || unavailable ? '原始媒体不可用，请关闭面板重试读取。' : '等待原始字节验证后可下载。'}</p>}
+      {!asset && <p className="reader-notice">{error || unavailable ? '原始媒体不可用，请关闭面板重试读取。' : (BUILD_POLICY.trustless ? '等待原始字节验证后可下载。' : '等待原始媒体准备后可下载。')}</p>}
     </div>, toolsHost)}
   </>
 }

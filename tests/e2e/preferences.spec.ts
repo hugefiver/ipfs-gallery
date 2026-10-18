@@ -1,12 +1,13 @@
 import type { Page } from '@playwright/test'
 import { test, expect } from './fixtures'
 import { FIXTURE_GATEWAYS, sourceUrl } from './gateway-route'
-import { DEFAULT_GATEWAYS } from '../../src/shared/gateways'
+import { expectedSwGalleryPolicy } from '../support/sw-gallery-policy'
 import { ui, openPanel, enterAlbum, enterReader, selectAlbumItem, expectReaderImage } from './gallery-ui'
 
 const key = 'ipfs-gallery.preferences.v1'
 const unrelatedKey = 'fixture.unrelated-owner'
 const defaults = { version: 1, layout: 'auto', sidebar: { desktop: true, mobile: false }, gateways: [] }
+const DEFAULT_GATEWAYS = expectedSwGalleryPolicy().defaultGateways
 type StorageFault = 'getter' | 'read' | 'write' | 'delete'
 
 declare global {

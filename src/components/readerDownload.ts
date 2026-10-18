@@ -1,5 +1,6 @@
 import type { AssetLease, AssetService, AssetTicket } from '../hooks/assetService'
 import type { GalleryItem } from '../shared/contracts'
+import { BUILD_POLICY } from '../shared/build-policy'
 import { safeFilename } from '../app/format'
 
 export class ReaderDownloadScope {
@@ -17,7 +18,7 @@ export class ReaderDownloadScope {
   async download(verified: AssetLease): Promise<void> {
     if (!this.active || this.ticket || !this.service || !verified.active) return
     this.busy(true)
-    this.notice('正在准备已验证的原始媒体…')
+    this.notice(BUILD_POLICY.trustless ? '正在准备已验证的原始媒体…' : '正在准备原始媒体…')
     const ticket = this.service.acquire(this.item.ref, 0)
     this.ticket = ticket
     let started = false
@@ -30,7 +31,7 @@ export class ReaderDownloadScope {
       anchor.download = safeFilename(this.item.title, original.mime)
       document.body.append(anchor)
       try { anchor.click(); started = true } finally { anchor.remove() }
-      this.notice('已开始下载经过验证的原始媒体。')
+      this.notice(BUILD_POLICY.trustless ? '已开始下载经过验证的原始媒体。' : '已开始下载原始媒体。')
     } catch {
       if (this.active) this.notice('下载失败；请重试下载，或重试读取原始媒体。')
     } finally {

@@ -1,18 +1,18 @@
 import { normalizeContentRef } from '../core/query'
 import { discoverGallery } from '../core/gallery'
 import { readVerifiedAsset } from '../core/media'
-import { createGatewayBroker, normalizeGateway } from '../network/broker'
+import { normalizeGateway } from '../network/gateways'
 import { createContentReader } from '../network/reader'
 import { GalleryWorkerRuntime } from './runtime'
+import { createBridgedBlockSource } from './block-bridge'
 
 const scope = globalThis as unknown as DedicatedWorkerGlobalScope
 const runtime = new GalleryWorkerRuntime({
   postMessage: (message, transfer) => scope.postMessage(message, transfer ?? []),
   normalizeContentRef,
   normalizeGateway,
-  createBroker: (config) => createGatewayBroker(config, {
-    fetch: globalThis.fetch.bind(globalThis), now: () => Date.now(), random: Math.random,
-  }),
+  createBroker: (config, sessionId) => createBridgedBlockSource(config, sessionId,
+    (message, transfer) => scope.postMessage(message, transfer)),
   createReader: createContentReader,
   discover: discoverGallery,
   readAsset: readVerifiedAsset,

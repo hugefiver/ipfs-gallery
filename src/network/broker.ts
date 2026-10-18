@@ -1,7 +1,10 @@
 import type { CID } from 'multiformats/cid'
 import type { GatewayStat, SessionConfig } from '../shared/contracts'
+import { BUILD_POLICY } from '../shared/build-policy'
 import { GalleryDomainError } from '../shared/errors'
 import { VerifiedBlockCache } from './cache'
+import { DirectCleanupError } from './direct-errors'
+import { cancelResponseBody as cancelBody, createReaderCancellation } from './direct-reader'
 import { abortable, cancellationError, checkSignal, networkError } from './errors'
 import { normalizeGateway } from './gateways'
 import type { BrokerDependencies, VerifiedBlockSource } from './types'
@@ -13,7 +16,17 @@ interface Gateway extends GatewayStat { consecutiveFailures: number; penaltyVers
 interface Flight {
   controller: AbortController
   consumers: Set<symbol>
-  promise: Promise<Uint8Array>
+  promise: Promise<BlockResult>
+}
+interface BlockResult { bytes: Uint8Array; gateway?: string }
+export interface ConfiguredGatewayEvidence { readonly canonicalCid: string; readonly gateway: string; readonly byteLength: number }
+const gatewayResults = new WeakMap<VerifiedBlockSource, WeakMap<Uint8Array, ConfiguredGatewayEvidence>>()
+
+/** Read-only evidence for compile-time non-strict configured-gateway results; copies and other sources have none. */
+export function brokerConfiguredGatewayEvidence(source: VerifiedBlockSource, canonicalCid: string,
+  exactBytes: Uint8Array): ConfiguredGatewayEvidence | undefined {
+  const evidence = gatewayResults.get(source)?.get(exactBytes)
+  return evidence?.canonicalCid === canonicalCid && evidence.byteLength === exactBytes.byteLength ? evidence : undefined
 }
 
 function retryAfter(value: string | null, now: number): number | undefined {
@@ -23,21 +36,37 @@ function retryAfter(value: string | null, now: number): number | undefined {
   return Number.isFinite(ms) && ms >= 0 ? Math.min(ms, 120_000) : undefined
 }
 
-async function readBlock(response: Response, maxBytes: number, signal: AbortSignal): Promise<Uint8Array> {
+async function readBlock(response: Response, maxBytes: number, signal: AbortSignal, settleOnAbort = false): Promise<Uint8Array> {
   const declared = response.headers.get('content-length')
+  if (settleOnAbort && declared !== null && (!/^\d+$/.test(declared) || !Number.isSafeInteger(Number(declared)))) {
+    await cancelBody(response)
+    throw networkError('NETWORK', '原始块长度无效。')
+  }
   if (declared !== null && /^\d+$/.test(declared) && Number(declared) > maxBytes) {
-    void response.body?.cancel().catch(() => {})
+    if (settleOnAbort) await cancelBody(response)
+    else void response.body?.cancel().catch(() => {})
     throw networkError('LIMIT', '原始块超过字节上限。')
   }
   if (response.body === null) return new Uint8Array()
   const reader = response.body.getReader()
+  const cancelReader = settleOnAbort ? createReaderCancellation(reader) : () => reader.cancel()
   let buffer = new Uint8Array(Math.min(maxBytes, 64 * 1024))
   let total = 0
   let complete = false
+  let cancellation: Promise<void> | undefined
+  const cancel = () => {
+    cancellation ??= cancelReader()
+    void cancellation.catch(() => {})
+    return cancellation
+  }
+  const onAbort = () => { void cancel() }
+  if (settleOnAbort) signal.addEventListener('abort', onAbort, { once: true })
   try {
     while (true) {
       checkSignal(signal)
-      const { value, done } = await abortable(reader.read(), signal)
+      const read = reader.read()
+      const { value, done } = await (settleOnAbort ? read : abortable(read, signal))
+      checkSignal(signal)
       if (done) { complete = true; break }
       total += value.byteLength
       if (total > maxBytes) throw networkError('LIMIT', '原始块超过字节上限。')
@@ -48,14 +77,22 @@ async function readBlock(response: Response, maxBytes: number, signal: AbortSign
       }
       buffer.set(value, total - value.byteLength)
     }
+    if (settleOnAbort && declared !== null && Number(declared) !== total) throw networkError('NETWORK', '原始块长度不匹配。')
     return buffer.slice(0, total)
   } finally {
-    if (!complete) void reader.cancel().catch(() => {})
-    reader.releaseLock()
+    signal.removeEventListener('abort', onAbort)
+    try {
+      if (!complete) {
+        if (settleOnAbort) await cancel()
+        else void cancel()
+      }
+      if (cancellation && settleOnAbort) await cancellation
+    } finally { reader.releaseLock() }
   }
 }
 
 export function createGatewayBroker(config: SessionConfig, dependencies: BrokerDependencies): VerifiedBlockSource {
+  const evidence = new WeakMap<Uint8Array, ConfiguredGatewayEvidence>()
   const fetchBlock = dependencies.fetch
   const limits = { ...config.limits }
   for (const key of ['maxGateways', 'maxBlockBytes', 'maxBlockConcurrency', 'maxGatewayConcurrency', 'gatewayTimeoutMs', 'blockTimeoutMs'] as const) {
@@ -73,6 +110,7 @@ export function createGatewayBroker(config: SessionConfig, dependencies: BrokerD
   let active = 0
   let schedules = 0
   let disposed = false
+  let cleanupFailure: DirectCleanupError | undefined
 
   function notify(): void { for (const wake of [...waiters]) wake() }
 
@@ -146,7 +184,7 @@ export function createGatewayBroker(config: SessionConfig, dependencies: BrokerD
     gateway.cooldownUntil = Math.max(gateway.cooldownUntil ?? 0, dependencies.now() + duration)
   }
 
-  async function attempt(cid: CID, gateway: Gateway, signal: AbortSignal): Promise<Uint8Array> {
+  async function attempt(cid: CID, gateway: Gateway, signal: AbortSignal): Promise<BlockResult> {
     const started = dependencies.now()
     const penaltyVersion = gateway.penaltyVersion
     const controller = new AbortController()
@@ -157,17 +195,38 @@ export function createGatewayBroker(config: SessionConfig, dependencies: BrokerD
     try {
       if (signal.aborted) forwardAbort()
       checkSignal(controller.signal)
-      const response = await abortable(fetchBlock(`${gateway.url}/ipfs/${cid.toV1().toString()}?format=raw`, {
+      const fetching = fetchBlock(`${gateway.url}/ipfs/${cid.toV1().toString()}?format=raw`, {
         method: 'GET', headers: { Accept: 'application/vnd.ipld.raw' }, signal: controller.signal,
         credentials: 'omit', referrerPolicy: 'no-referrer', redirect: 'error', cache: 'no-store',
-      }), controller.signal)
-      if (response.redirected || !response.ok) {
-        void response.body?.cancel().catch(() => {})
+      })
+      const response = await (dependencies.settleOnAbort ? fetching : abortable(fetching, controller.signal))
+      if (controller.signal.aborted) {
+        if (dependencies.settleOnAbort) await cancelBody(response)
+        else await response.body?.cancel()
+        checkSignal(controller.signal)
+      }
+      let unsafeHeaders = false
+      if (dependencies.settleOnAbort) {
+        let headerBytes = 0
+        let headerCount = 0
+        for (const [name, value] of response.headers) {
+          headerBytes += name.length + value.length
+          if (++headerCount > 64 || headerBytes > 16 * 1024) { unsafeHeaders = true; break }
+        }
+        const type = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase()
+        if (type && !['application/vnd.ipld.raw', 'application/octet-stream'].includes(type)) unsafeHeaders = true
+      }
+      if (response.redirected || !response.ok || unsafeHeaders || response.type === 'opaque' || response.type === 'opaqueredirect') {
+        if (dependencies.settleOnAbort) await cancelBody(response)
+        else void response.body?.cancel().catch(() => {})
         if (response.status === 429 || response.status === 503) retryMs = retryAfter(response.headers.get('retry-after'), dependencies.now())
         throw networkError(response.status === 404 ? 'NOT_FOUND' : 'NETWORK', '网关未能返回原始块。', gateway.url)
       }
-      const bytes = await readBlock(response, limits.maxBlockBytes, controller.signal)
-      await abortable(verifyBlock(cid, bytes, limits.maxBlockBytes), controller.signal)
+      const bytes = await readBlock(response, limits.maxBlockBytes, controller.signal, dependencies.settleOnAbort)
+      if (BUILD_POLICY.trustless) {
+        const verifying = verifyBlock(cid, bytes, limits.maxBlockBytes)
+        await (dependencies.settleOnAbort ? verifying : abortable(verifying, controller.signal))
+      }
       checkSignal(controller.signal)
       const elapsed = Math.max(1, dependencies.now() - started)
       gateway.ewmaMs = gateway.ewmaMs === undefined ? elapsed : gateway.ewmaMs * 0.75 + elapsed * 0.25
@@ -177,8 +236,14 @@ export function createGatewayBroker(config: SessionConfig, dependencies: BrokerD
         gateway.state = 'healthy'
         delete gateway.cooldownUntil
       }
-      return bytes
+      return { bytes, ...(!BUILD_POLICY.trustless ? { gateway: gateway.url } : {}) }
     } catch (value) {
+      if (value instanceof DirectCleanupError) {
+        cleanupFailure ??= value
+        controller.abort(value)
+        cache.clear()
+        throw value
+      }
       const error = controller.signal.aborted
         ? cancellationError(controller.signal.reason, gateway.url)
         : value instanceof GalleryDomainError ? new GalleryDomainError({ ...value.error, gateway: gateway.url }) : networkError('NETWORK', '网关读取失败。', gateway.url)
@@ -193,11 +258,11 @@ export function createGatewayBroker(config: SessionConfig, dependencies: BrokerD
     }
   }
 
-  async function load(cid: CID, signal: AbortSignal): Promise<Uint8Array> {
+  async function load(cid: CID, signal: AbortSignal): Promise<BlockResult> {
     if (cid.multihash.code === 0) {
       const bytes = cid.multihash.digest.slice()
       await abortable(verifyBlock(cid, bytes, limits.maxBlockBytes), signal)
-      return bytes
+      return { bytes }
     }
     const tried = new Set<Gateway>()
     let failure: GalleryDomainError | undefined
@@ -206,6 +271,7 @@ export function createGatewayBroker(config: SessionConfig, dependencies: BrokerD
       const gateway = await acquire(tried, signal)
       tried.add(gateway)
       try { return await attempt(cid, gateway, signal) } catch (value) {
+        if (value instanceof DirectCleanupError) throw value
         checkSignal(signal)
         const error = value as GalleryDomainError
         const rank = (code: string) => priority[code as keyof typeof priority] ?? 0
@@ -218,11 +284,11 @@ export function createGatewayBroker(config: SessionConfig, dependencies: BrokerD
   function newFlight(cid: CID, key: string): Flight {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(networkError('TIMEOUT', '块读取总期限已到。')), limits.blockTimeoutMs)
-    const flight: Flight = { controller, consumers: new Set(), promise: Promise.resolve(new Uint8Array()) }
-    flight.promise = load(cid, controller.signal).then((bytes) => {
+    const flight: Flight = { controller, consumers: new Set(), promise: Promise.resolve({ bytes: new Uint8Array() }) }
+    flight.promise = load(cid, controller.signal).then((result) => {
       checkSignal(controller.signal)
-      cache.set(key, bytes)
-      return bytes
+      if (result.gateway === undefined) cache.set(key, result.bytes)
+      return result
     }).finally(() => {
       clearTimeout(timer)
       if (flights.get(key) === flight) flights.delete(key)
@@ -231,9 +297,10 @@ export function createGatewayBroker(config: SessionConfig, dependencies: BrokerD
     return flight
   }
 
-  return {
+  const source: VerifiedBlockSource = {
     async get(value, signal) {
       checkSignal(signal)
+      if (cleanupFailure) throw cleanupFailure
       if (disposed) throw networkError('CANCELLED', '块读取器已释放。')
       const cid = parseBlockCid(value, limits.maxBlockBytes)
       const key = cid.toV1().toString()
@@ -243,14 +310,18 @@ export function createGatewayBroker(config: SessionConfig, dependencies: BrokerD
       const consumer = Symbol()
       flight.consumers.add(consumer)
       try {
-        const bytes = await abortable(flight.promise, signal)
+        const result = await abortable(flight.promise, signal)
         checkSignal(signal)
-        return bytes.slice()
+        const bytes = result.bytes.slice()
+        if (result.gateway !== undefined) evidence.set(bytes, Object.freeze({ canonicalCid: key,
+          gateway: result.gateway, byteLength: bytes.byteLength }))
+        return bytes
       } finally {
         flight.consumers.delete(consumer)
         if (flight.consumers.size === 0) {
           flight.controller.abort(networkError('CANCELLED', '所有块读取消费者均已取消。'))
-          if (flights.get(key) === flight) flights.delete(key)
+          if (dependencies.settleOnAbort) await flight.promise.catch((error: unknown) => { if (error instanceof DirectCleanupError) throw error })
+          else if (flights.get(key) === flight) flights.delete(key)
         }
       }
     },
@@ -265,10 +336,13 @@ export function createGatewayBroker(config: SessionConfig, dependencies: BrokerD
     dispose() {
       if (disposed) return
       disposed = true
+      gatewayResults.delete(source)
       for (const flight of flights.values()) flight.controller.abort(networkError('CANCELLED', '块读取器已释放。'))
-      flights.clear()
+      if (!dependencies.settleOnAbort) flights.clear()
       cache.clear()
       notify()
     },
   }
+  gatewayResults.set(source, evidence)
+  return source
 }

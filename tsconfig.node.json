@@ -6,5 +6,9 @@
     "lib": ["ES2023"],
     "types": ["node"]
   },
-  "include": ["*.config.ts"]
+  "include": [
+    "*.config.ts", "build/**/*.ts", "tests/support/sw-gallery-policy.ts",
+    "src/shared/build-policy-defaults.ts", "src/shared/gateway-normalizer.ts",
+    "src/shared/errors.ts", "src/shared/contracts.ts", "src/shared/limits.ts"
+  ]
 }

@@ -6,6 +6,7 @@ import { readVerifiedAsset } from '../../src/core/media'
 import { normalizeGateway } from '../../src/network/broker'
 import { GalleryWorkerRuntime, type RuntimeDependencies } from '../../src/worker/runtime'
 import { MAX_PENDING_REQUESTS } from '../../src/worker/protocol'
+import { GalleryDomainError } from '../../src/shared/errors'
 import { asset, deferred, discover, load, ref, result } from './helpers'
 
 function harness(overrides: Partial<RuntimeDependencies> = {}) {
@@ -43,6 +44,41 @@ function harness(overrides: Partial<RuntimeDependencies> = {}) {
 afterEach(() => vi.useRealTimers())
 
 describe('Worker runtime', () => {
+  it('returns business errors while retaining three real slots and assembly until a successful snapshot barrier', async () => {
+    const gate = deferred<void>()
+    let pending = false
+    const test = harness({
+      createBroker: () => ({ get: async () => new Uint8Array(), snapshot: () => [], dispose: () => {},
+        settled: () => pending ? gate.promise : Promise.resolve() }),
+      readAsset: vi.fn(async () => { pending = true; throw new GalleryDomainError({ code: 'NETWORK', message: 'failed', retryable: true }) }),
+    })
+    test.runtime.handleMessage(discover())
+    await vi.waitFor(() => expect(test.terminal('discover')).toHaveLength(1))
+    for (let index = 0; index < 3; index++) test.runtime.handleMessage(load(`old-${index}`))
+    await vi.waitFor(() => expect(test.terminal('old-2')).toHaveLength(1))
+    expect(test.runtime.usage()).toMatchObject({ activeAssets: 3, assemblyBytes: 12 })
+    test.runtime.handleMessage(discover('next', 'next-session'))
+    test.runtime.handleMessage(load('fourth', 'next-session'))
+    await vi.waitFor(() => expect(test.terminal('next')).toHaveLength(1))
+    expect(test.dependencies.readAsset).toHaveBeenCalledTimes(3)
+    expect(test.runtime.usage().activeAssets).toBe(3)
+    gate.resolve()
+    await vi.waitFor(() => expect(test.dependencies.readAsset).toHaveBeenCalledTimes(4))
+    await vi.waitFor(() => expect(test.runtime.usage()).toEqual({ activeAssets: 0, assemblyBytes: 0, running: 0 }))
+    test.dispose()
+  })
+  it('does not release real resource accounting when the cleanup barrier rejects', async () => {
+    let pending = false
+    const test = harness({ createBroker: () => ({ get: async () => new Uint8Array(), snapshot: () => [], dispose: () => {},
+      settled: () => pending ? Promise.reject(new Error('cleanup failed')) : Promise.resolve() }),
+    readAsset: vi.fn(async () => { pending = true; return asset() }) })
+    test.runtime.handleMessage(discover())
+    await vi.waitFor(() => expect(test.terminal('discover')).toHaveLength(1))
+    test.runtime.handleMessage(load('asset'))
+    await vi.waitFor(() => expect(test.terminal('asset')).toHaveLength(1))
+    expect(test.runtime.usage()).toEqual({ activeAssets: 1, assemblyBytes: 4, running: 1 })
+    test.dispose()
+  })
   it('uses isolated operation readers with the frozen discovery/asset budgets', async () => {
     const test = harness()
     test.runtime.handleMessage(discover())
@@ -66,7 +102,7 @@ describe('Worker runtime', () => {
     test.runtime.handleMessage(request)
     await vi.waitFor(() => expect(test.terminal('discover')).toHaveLength(1))
     expect(test.dependencies.discover).toHaveBeenCalledWith({ source: { kind: 'cids', refs: [ref], browse: false } }, expect.anything(), expect.anything())
-    expect(test.dependencies.createBroker).toHaveBeenCalledWith(expect.objectContaining({ gateways: ['https://gateway.example'] }))
+    expect(test.dependencies.createBroker).toHaveBeenCalledWith(expect.objectContaining({ gateways: ['https://gateway.example'] }), 'session')
     const excessive = discover('raised', 'raised-session')
     excessive.config.limits.maxAssetConcurrency = 4
     test.runtime.handleMessage(excessive)

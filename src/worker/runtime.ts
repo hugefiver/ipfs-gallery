@@ -16,7 +16,7 @@ import { identity, MAX_PENDING_REQUESTS, MAX_REQUEST_IDS, parseRequest, type Nor
 
 export interface RuntimeDependencies extends Normalizers {
   postMessage(message: WorkerResponse, transfer?: Transferable[]): void
-  createBroker(config: SessionConfig): VerifiedBlockSource
+  createBroker(config: SessionConfig, sessionId: string): VerifiedBlockSource
   createReader(source: VerifiedBlockSource, options: { maxInputBytes: number }): ContentReader
   discover(input: GalleryInput, reader: ContentReader, options: DiscoveryOptions): Promise<GalleryResult>
   /** Returns an exact-length, exclusively owned buffer, never a broker/cache buffer. */
@@ -71,6 +71,8 @@ export class GalleryWorkerRuntime {
     this.now = dependencies.now ?? (() => performance.now())
   }
 
+  usage() { return { activeAssets: this.activeAssets, assemblyBytes: this.assemblyBytes, running: this.running.size } }
+
   handleMessage(value: unknown): void {
     let request: WorkerRequest
     try {
@@ -108,7 +110,7 @@ export class GalleryWorkerRuntime {
       this.cancelSession()
       try {
         this.session = { id: request.sessionId, config: request.config,
-          broker: this.dependencies.createBroker(request.config) }
+          broker: this.dependencies.createBroker(request.config, request.sessionId) }
       } catch (error) {
         this.reject(request, toGalleryError(error))
         return
@@ -208,8 +210,15 @@ export class GalleryWorkerRuntime {
     } catch (error) {
       this.finish(operation, { type: 'error', ...identity(operation.request), error: toGalleryError(error) })
     } finally {
+      await this.settled(operation.session.broker)
       this.running.delete(operation)
     }
+  }
+
+  private async settled(source: VerifiedBlockSource): Promise<void> {
+    try { await source.settled?.() }
+    // Business terminal is separate; failed cleanup cannot become available capacity.
+    catch { await new Promise<void>(() => {}) }
   }
 
   private pumpAssets(): void {
@@ -305,6 +314,7 @@ export class GalleryWorkerRuntime {
     } catch (error) {
       this.finish(operation, { type: 'error', ...identity(operation.request), error: toGalleryError(error) })
     } finally {
+      await this.settled(operation.session.broker)
       release?.()
     }
   }

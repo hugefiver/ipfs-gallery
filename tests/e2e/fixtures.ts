@@ -1,21 +1,38 @@
 import { test as base, expect } from '@playwright/test'
 import { writeFile } from 'node:fs/promises'
 import { createGalleryFixtures, type GalleryFixtures } from '../fixtures/unixfs'
-import { startTrustlessGateway, type TrustlessGateway } from '../support/trustless-gateway'
-import { routeFixtureGateways } from './gateway-route'
+import { startSwGalleryNetwork, SW_GALLERY_BROWSER_ARGS, type SwGalleryNetwork } from '../support/sw-gallery-network'
 import { createPreviewFixtures, type PreviewFixtures } from './preview-fixtures'
-import { DEFAULT_GATEWAYS } from '../../src/shared/gateways'
+import { expectedSwGalleryPolicy, type SwGalleryTestOptions } from '../support/sw-gallery-policy'
+import { createPng } from '../fixtures/media'
+import { CID } from 'multiformats/cid'
+import { sha256 } from 'multiformats/hashes/sha2'
+import { createSwBoundaryPng } from '../support/sw-gallery-media'
+import type { FixtureFile } from '../fixtures/unixfs'
+import { observeVerifiedBlobs } from './gallery-ui'
 
-type NetworkFixture = {
-  slow: TrustlessGateway
-  fast: TrustlessGateway
-  bridge: Awaited<ReturnType<typeof routeFixtureGateways>>
-  unexpectedRequests: string[]
-}
+type NetworkFixture = SwGalleryNetwork & { boundary?: FixtureFile; alternate: Uint8Array }
 
-export const test = base.extend<{ network: NetworkFixture; allowDefaultGateways: boolean; surfaceDiagnostics: void }, { galleryFixtures: GalleryFixtures; previewFixtures: PreviewFixtures }>({
-  serviceWorkers: 'block',
+export const test = base.extend<SwGalleryTestOptions & { network: NetworkFixture; boundaryBlock: 'none' | '2MiB' | '4MiB'; allowDefaultGateways: boolean; directTransport: 'none' | 'bitswap' | 'http'; appPrefix: '/' | '/gallery/'; mediaObservation: void; surfaceDiagnostics: void }, { galleryFixtures: GalleryFixtures; previewFixtures: PreviewFixtures }>({
+  serviceWorkers: 'allow',
+  launchOptions: { args: SW_GALLERY_BROWSER_ARGS },
+  directTransport: ['none', { option: true }],
+  appPrefix: ['/', { option: true }],
+  boundaryBlock: ['none', { option: true }],
+  expectedPolicy: [expectedSwGalleryPolicy(), { option: true }],
+  galleryBuildDir: [undefined, { option: true }],
+  oppositeBuildDir: [undefined, { option: true }],
+  serviceWorkerBuildDir: [undefined, { option: true }],
+  dedicatedWorkerBuildDir: [undefined, { option: true }],
+  alternateGatewayMedia: [false, { option: true }],
+  httpProviderAsGateway: [false, { option: true }],
+  baseURL: async ({ network }, use) => { await use(network.baseURL) },
+  proxy: async ({ network }, use) => { await use({ server: network.proxy.proxyUrl, bypass: '<-loopback>' }) },
   allowDefaultGateways: [false, { option: true }],
+  mediaObservation: [async ({ context }, use) => {
+    await observeVerifiedBlobs(context)
+    await use(undefined)
+  }, { auto: true }],
   surfaceDiagnostics: [async ({ page }, use, testInfo) => {
     const errors: string[] = []
     const failedRequests: { url: string; error: string | undefined }[] = []
@@ -58,32 +75,34 @@ export const test = base.extend<{ network: NetworkFixture; allowDefaultGateways:
   previewFixtures: [async ({ galleryFixtures }, use) => {
     await use(await createPreviewFixtures(galleryFixtures))
   }, { scope: 'worker' }],
-  network: [async ({ context, baseURL, galleryFixtures, previewFixtures, allowDefaultGateways }, use) => {
+  network: [async ({ galleryFixtures, previewFixtures, allowDefaultGateways, directTransport, appPrefix, boundaryBlock,
+    expectedPolicy, galleryBuildDir, serviceWorkerBuildDir, dedicatedWorkerBuildDir, alternateGatewayMedia, httpProviderAsGateway }, use) => {
     void previewFixtures
-    if (!baseURL) throw new Error('Fixture retrieval requires an isolated application baseURL')
-    const appOrigin = new URL(baseURL).origin
-    if (new URL(baseURL).port === '4173') throw new Error('Fixture tests must not use the user preview')
-    const external = (url: URL) => ['http:', 'https:'].includes(url.protocol) && url.origin !== appOrigin
-    const slow = await startTrustlessGateway(galleryFixtures.blocks, { kind: 'delay', milliseconds: 40 })
-    let fast: TrustlessGateway | undefined
-    let bridge: Awaited<ReturnType<typeof routeFixtureGateways>> | undefined
-    const unexpectedRequests: string[] = []
-    const denyExternal = async (route: import('@playwright/test').Route) => {
-      unexpectedRequests.push(route.request().url())
-      await route.abort('blockedbyclient')
+    const blocks = alternateGatewayMedia || boundaryBlock !== 'none' ? new Map(galleryFixtures.blocks) : galleryFixtures.blocks
+    const alternate = createPng(32, 24, 197)
+    if (alternateGatewayMedia) blocks.set(galleryFixtures.raw.cid, { cid: CID.parse(galleryFixtures.raw.cid), bytes: alternate })
+    let boundary: FixtureFile | undefined
+    if (boundaryBlock !== 'none') {
+      const bytes = createSwBoundaryPng(boundaryBlock === '2MiB' ? 2 : 4)
+      const cid = CID.createV1(0x55, await sha256.digest(bytes))
+      boundary = { cid: cid.toString(), ref: { cid: cid.toString(), path: [] }, bytes }
+      blocks.set(cid.toString(), { cid, bytes })
     }
+    const network = await startSwGalleryNetwork(blocks, {
+      prefix: appPrefix,
+      buildDir: galleryBuildDir,
+      serviceWorkerBuildDir,
+      dedicatedWorkerBuildDir,
+      httpProviderAsGateway,
+      transport: directTransport,
+      additionalGateways: allowDefaultGateways ? expectedPolicy.defaultGateways : [],
+    })
     try {
-      fast = await startTrustlessGateway(galleryFixtures.blocks)
-      // Never allow a broken URL/configuration test to hit a public gateway.
-      await context.route(external, denyExternal)
-      bridge = await routeFixtureGateways(context, { slow, fast }, allowDefaultGateways ? DEFAULT_GATEWAYS : [])
-      await use({ slow, fast, bridge, unexpectedRequests })
-      expect(unexpectedRequests).toEqual([])
-      expect(bridge.errors).toEqual([])
+      await use(Object.assign(network, { boundary, alternate }))
+      expect(network.unexpectedRequests).toEqual([])
+      expect(network.bridge.errors).toEqual([])
     } finally {
-      await bridge?.close()
-      await context.unroute(external, denyExternal)
-      await Promise.all([slow.close(), fast?.close()])
+      await network.close()
     }
   }, { auto: true }],
 })

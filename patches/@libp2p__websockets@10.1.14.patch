@@ -1,0 +1,629 @@
+diff --git a/dist/src/index.d.ts b/dist/src/index.d.ts
+index e0427b3cdeaace040409b9635eb9aade009d3be7..22c22dbcfb6db5ada4bae688bf0af1f3d0c05c2b 100644
+--- a/dist/src/index.d.ts
++++ b/dist/src/index.d.ts
+@@ -22,12 +22,19 @@
+  * await node.dial(ma)
+  * ```
+  */
++import type { WebSocketMultiaddrConnection } from './websocket-to-conn.js';
+ import type { Transport, AbortOptions, ComponentLogger, OutboundConnectionUpgradeEvents, Metrics, CounterGroup, Libp2pEvents } from '@libp2p/interface';
+ import type { TypedEventTarget } from 'main-event';
+ import type http from 'node:http';
+ import type https from 'node:https';
+ import type { ProgressEvent } from 'progress-events';
++export type { WebSocketMultiaddrConnection } from './websocket-to-conn.js';
+ export interface WebSocketsInit extends AbortOptions {
++    /**
++     * Receives each outbound raw connection before upgrade. Its `closed` promise
++     * tracks native socket exit, independently of logical stream abort/close.
++     */
++    onConnection?: (connection: WebSocketMultiaddrConnection) => void;
+     /**
+      * Options used to create the HTTP server
+      */
+diff --git a/dist/src/index.d.ts.map b/dist/src/index.d.ts.map
+index 8834f11fe30a49fc9f8ed2b498bc842f9cc6ca2d..d956d39c89be80c0ba94d32aae8ffa14b4045fa9 100644
+--- a/dist/src/index.d.ts.map
++++ b/dist/src/index.d.ts.map
+@@ -1 +1 @@
+-{"version":3,"file":"index.d.ts","sourceRoot":"","sources":["../../src/index.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;;;;;;;;;;;;GAuBG;AASH,OAAO,KAAK,EAAE,SAAS,EAAyD,YAAY,EAAE,eAAe,EAAsB,+BAA+B,EAAE,OAAO,EAAE,YAAY,EAAE,YAAY,EAAE,MAAM,mBAAmB,CAAA;AAElO,OAAO,KAAK,EAAE,gBAAgB,EAAE,MAAM,YAAY,CAAA;AAClD,OAAO,KAAK,IAAI,MAAM,WAAW,CAAA;AACjC,OAAO,KAAK,KAAK,MAAM,YAAY,CAAA;AACnC,OAAO,KAAK,EAAE,aAAa,EAAE,MAAM,iBAAiB,CAAA;AAEpD,MAAM,WAAW,cAAe,SAAQ,YAAY;IAClD;;OAEG;IACH,IAAI,CAAC,EAAE,IAAI,CAAC,aAAa,CAAA;IAEzB;;;OAGG;IACH,KAAK,CAAC,EAAE,KAAK,CAAC,aAAa,CAAA;IAE3B;;;;;;;OAOG;IACH,iBAAiB,CAAC,EAAE,MAAM,CAAA;IAE1B;;;;;;OAMG;IACH,0BAA0B,CAAC,EAAE,MAAM,CAAA;CACpC;AAED,MAAM,WAAW,oBAAoB;IACnC,MAAM,EAAE,eAAe,CAAA;IACvB,MAAM,EAAE,gBAAgB,CAAC,YAAY,CAAC,CAAA;IACtC,OAAO,CAAC,EAAE,OAAO,CAAA;CAClB;AAED,MAAM,WAAW,iBAAiB;IAChC,YAAY,EAAE,YAAY,CAAA;CAC3B;AAED,MAAM,MAAM,oBAAoB,GAC9B,+BAA+B,GAC/B,aAAa,CAAC,4BAA4B,CAAC,CAAA;AA6G7C,wBAAgB,UAAU,CAAE,IAAI,GAAE,cAAmB,GAAG,CAAC,UAAU,EAAE,oBAAoB,KAAK,SAAS,CAItG"}
+\ No newline at end of file
++{"version":3,"file":"index.d.ts","sourceRoot":"","sources":["../../src/index.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;;;;;;;;;;;;GAuBG;AASH,OAAO,KAAK,EAAE,4BAA4B,EAAE,MAAM,wBAAwB,CAAA;AAC1E,OAAO,KAAK,EAAE,SAAS,EAAyD,YAAY,EAAE,eAAe,EAAsB,+BAA+B,EAAE,OAAO,EAAE,YAAY,EAAE,YAAY,EAAE,MAAM,mBAAmB,CAAA;AAElO,OAAO,KAAK,EAAE,gBAAgB,EAAE,MAAM,YAAY,CAAA;AAClD,OAAO,KAAK,IAAI,MAAM,WAAW,CAAA;AACjC,OAAO,KAAK,KAAK,MAAM,YAAY,CAAA;AACnC,OAAO,KAAK,EAAE,aAAa,EAAE,MAAM,iBAAiB,CAAA;AAEpD,YAAY,EAAE,4BAA4B,EAAE,MAAM,wBAAwB,CAAA;AAE1E,MAAM,WAAW,cAAe,SAAQ,YAAY;IAClD;;;OAGG;IACH,YAAY,CAAC,EAAE,CAAC,UAAU,EAAE,4BAA4B,KAAK,IAAI,CAAA;IAEjE;;OAEG;IACH,IAAI,CAAC,EAAE,IAAI,CAAC,aAAa,CAAA;IAEzB;;;OAGG;IACH,KAAK,CAAC,EAAE,KAAK,CAAC,aAAa,CAAA;IAE3B;;;;;;;OAOG;IACH,iBAAiB,CAAC,EAAE,MAAM,CAAA;IAE1B;;;;;;OAMG;IACH,0BAA0B,CAAC,EAAE,MAAM,CAAA;CACpC;AAED,MAAM,WAAW,oBAAoB;IACnC,MAAM,EAAE,eAAe,CAAA;IACvB,MAAM,EAAE,gBAAgB,CAAC,YAAY,CAAC,CAAA;IACtC,OAAO,CAAC,EAAE,OAAO,CAAA;CAClB;AAED,MAAM,WAAW,iBAAiB;IAChC,YAAY,EAAE,YAAY,CAAA;CAC3B;AAED,MAAM,MAAM,oBAAoB,GAC9B,+BAA+B,GAC/B,aAAa,CAAC,4BAA4B,CAAC,CAAA;AAwJ7C,wBAAgB,UAAU,CAAE,IAAI,GAAE,cAAmB,GAAG,CAAC,UAAU,EAAE,oBAAoB,KAAK,SAAS,CAItG"}
+diff --git a/dist/src/index.js b/dist/src/index.js
+index 2ebb1f9d197fb564aab0bcb19a3d635d88b96fb1..2fad7ad725233a132626afa957d0db2dff51a163 100644
+--- a/dist/src/index.js
++++ b/dist/src/index.js
+@@ -25,9 +25,9 @@
+ import { transportSymbol, serviceCapabilities, ConnectionFailedError } from '@libp2p/interface';
+ import { WebSockets as WebSocketsMatcher, WebSocketsSecure } from '@multiformats/multiaddr-matcher';
+ import { multiaddrToUri as toUri } from '@multiformats/multiaddr-to-uri';
+-import { pEvent } from 'p-event';
+ import { CustomProgressEvent } from 'progress-events';
+ import { createListener } from "./listener.js";
++import { closeSocket } from "./socket-lifecycle.js";
+ import { webSocketToMaConn } from "./websocket-to-conn.js";
+ class WebSockets {
+     log;
+@@ -67,9 +67,22 @@ class WebSockets {
+             bufferedAmountPollInterval: this.init.bufferedAmountPollInterval
+         });
+         this.log('new outbound connection %s', maConn.remoteAddr);
+-        const conn = await options.upgrader.upgradeOutbound(maConn, options);
+-        this.log('outbound connection %s upgraded', maConn.remoteAddr);
+-        return conn;
++        try {
++            this.init.onConnection?.(maConn);
++            options.signal?.throwIfAborted();
++            if (maConn.status !== 'open') {
++                throw new ConnectionFailedError(`Could not connect to ${ma}`);
++            }
++            const conn = await options.upgrader.upgradeOutbound(maConn, options);
++            options.signal?.throwIfAborted();
++            this.log('outbound connection %s upgraded', maConn.remoteAddr);
++            return conn;
++        }
++        catch (err) {
++            maConn.abort(err);
++            await maConn.closed;
++            throw err;
++        }
+     }
+     async _connect(ma, options) {
+         options?.signal?.throwIfAborted();
+@@ -77,23 +90,50 @@ class WebSockets {
+         this.log('create websocket connection to %s', uri);
+         const websocket = new WebSocket(uri);
+         websocket.binaryType = 'arraybuffer';
++        let cleanup = () => { };
+         try {
+-            options.onProgress?.(new CustomProgressEvent('websockets:open-connection'));
+-            await pEvent(websocket, 'open', options);
++            await new Promise((resolve, reject) => {
++                const onOpen = () => { resolve(); };
++                const onError = (event) => { reject(event); };
++                const onClose = () => { reject(new ConnectionFailedError(`Could not connect to ${uri}`)); };
++                const onAbort = () => { reject(options.signal?.reason); };
++                cleanup = () => {
++                    websocket.removeEventListener('open', onOpen);
++                    websocket.removeEventListener('error', onError);
++                    websocket.removeEventListener('close', onClose);
++                    options.signal?.removeEventListener('abort', onAbort);
++                };
++                websocket.addEventListener('open', onOpen);
++                websocket.addEventListener('error', onError);
++                websocket.addEventListener('close', onClose);
++                options.signal?.addEventListener('abort', onAbort, { once: true });
++                options.signal?.throwIfAborted();
++                options.onProgress?.(new CustomProgressEvent('websockets:open-connection'));
++            });
++            options.signal?.throwIfAborted();
++            if (websocket.readyState !== 1) {
++                throw new ConnectionFailedError(`Could not connect to ${uri}`);
++            }
+         }
+         catch (err) {
++            cleanup();
++            const error = options.signal?.aborted ? new ConnectionFailedError(`Could not connect to ${uri}`) : err;
+             if (options.signal?.aborted) {
+                 this.metrics?.dialerEvents.increment({ abort: true });
+-                throw new ConnectionFailedError(`Could not connect to ${uri}`);
+             }
+             else {
+                 this.metrics?.dialerEvents.increment({ error: true });
+             }
+             try {
+-                websocket.close();
++                await closeSocket(websocket);
+             }
+-            catch { }
+-            throw err;
++            catch (closeError) {
++                this.log.error('error closing failed handshake - %e', closeError);
++            }
++            throw error;
++        }
++        finally {
++            cleanup();
+         }
+         this.log('connected %s', ma);
+         this.metrics?.dialerEvents.increment({ connect: true });
+diff --git a/dist/src/index.js.map b/dist/src/index.js.map
+index f48a111f5af107dbb9da28382b8c9a1aba5f666c..0cb598bc87857032e07cdfe906c0d2c70bc6f071 100644
+--- a/dist/src/index.js.map
++++ b/dist/src/index.js.map
+@@ -1 +1 @@
+-{"version":3,"file":"index.js","sourceRoot":"","sources":["../../src/index.ts"],"names":[],"mappings":"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"}
+\ No newline at end of file
++{"version":3,"file":"index.js","sourceRoot":"","sources":["../../src/index.ts"],"names":[],"mappings":"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"}
+diff --git a/dist/src/socket-lifecycle.d.ts b/dist/src/socket-lifecycle.d.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..004fe178ac54a066e0227f0b04e29f2a91ad2985
+--- /dev/null
++++ b/dist/src/socket-lifecycle.d.ts
+@@ -0,0 +1,4 @@
++/** Resolves only when the native socket is CLOSED or has emitted close. */
++export declare function socketClosed(websocket: WebSocket): Promise<void>;
++export declare function closeSocket(websocket: WebSocket): Promise<void>;
++//# sourceMappingURL=socket-lifecycle.d.ts.map
+diff --git a/dist/src/socket-lifecycle.d.ts.map b/dist/src/socket-lifecycle.d.ts.map
+new file mode 100644
+index 0000000000000000000000000000000000000000..dd6ba4cf124187c2bd138f3719d6f46f050c0b07
+--- /dev/null
++++ b/dist/src/socket-lifecycle.d.ts.map
+@@ -0,0 +1 @@
++{"version":3,"file":"socket-lifecycle.d.ts","sourceRoot":"","sources":["../../src/socket-lifecycle.ts"],"names":[],"mappings":"AAEA,2EAA2E;AAC3E,wBAAgB,YAAY,CAAE,SAAS,EAAE,SAAS,GAAG,OAAO,CAAC,IAAI,CAAC,CAgBjE;AAED,wBAAsB,WAAW,CAAE,SAAS,EAAE,SAAS,GAAG,OAAO,CAAC,IAAI,CAAC,CAWtE"}
+diff --git a/dist/src/socket-lifecycle.js b/dist/src/socket-lifecycle.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..c001aa830bcaeef23a26fe547a7840dd6b0b2d18
+--- /dev/null
++++ b/dist/src/socket-lifecycle.js
+@@ -0,0 +1,29 @@
++const closedSockets = new WeakMap();
++/** Resolves only when the native socket is CLOSED or has emitted close. */
++export function socketClosed(websocket) {
++    let closed = closedSockets.get(websocket);
++    if (closed == null) {
++        closed = new Promise((resolve) => {
++            if (websocket.readyState === 3) {
++                resolve();
++                return;
++            }
++            websocket.addEventListener('close', () => { resolve(); }, { once: true });
++        });
++        closedSockets.set(websocket, closed);
++    }
++    return closed;
++}
++export async function closeSocket(websocket) {
++    const closed = socketClosed(websocket);
++    try {
++        if (websocket.readyState < 2) {
++            websocket.close();
++        }
++    }
++    finally {
++        // A failed close call is not evidence that the native resource has exited.
++        await closed;
++    }
++}
++//# sourceMappingURL=socket-lifecycle.js.map
+diff --git a/dist/src/socket-lifecycle.js.map b/dist/src/socket-lifecycle.js.map
+new file mode 100644
+index 0000000000000000000000000000000000000000..022530a8f93be41e3ebbfe6ea0d377e8d797cbf4
+--- /dev/null
++++ b/dist/src/socket-lifecycle.js.map
+@@ -0,0 +1 @@
++{"version":3,"file":"socket-lifecycle.js","sourceRoot":"","sources":["../../src/socket-lifecycle.ts"],"names":[],"mappings":"AAAA,MAAM,aAAa,GAAG,IAAI,OAAO,EAA4B,CAAA;AAE7D,2EAA2E;AAC3E,MAAM,UAAU,YAAY,CAAE,SAAoB;IAChD,IAAI,MAAM,GAAG,aAAa,CAAC,GAAG,CAAC,SAAS,CAAC,CAAA;IAEzC,IAAI,MAAM,IAAI,IAAI,EAAE,CAAC;QACnB,MAAM,GAAG,IAAI,OAAO,CAAO,CAAC,OAAO,EAAE,EAAE;YACrC,IAAI,SAAS,CAAC,UAAU,KAAK,CAAC,EAAE,CAAC;gBAC/B,OAAO,EAAE,CAAA;gBACT,OAAM;YACR,CAAC;YAED,SAAS,CAAC,gBAAgB,CAAC,OAAO,EAAE,GAAG,EAAE,GAAG,OAAO,EAAE,CAAA,CAAC,CAAC,EAAE,EAAE,IAAI,EAAE,IAAI,EAAE,CAAC,CAAA;QAC1E,CAAC,CAAC,CAAA;QACF,aAAa,CAAC,GAAG,CAAC,SAAS,EAAE,MAAM,CAAC,CAAA;IACtC,CAAC;IAED,OAAO,MAAM,CAAA;AACf,CAAC;AAED,MAAM,CAAC,KAAK,UAAU,WAAW,CAAE,SAAoB;IACrD,MAAM,MAAM,GAAG,YAAY,CAAC,SAAS,CAAC,CAAA;IAEtC,IAAI,CAAC;QACH,IAAI,SAAS,CAAC,UAAU,GAAG,CAAC,EAAE,CAAC;YAC7B,SAAS,CAAC,KAAK,EAAE,CAAA;QACnB,CAAC;IACH,CAAC;YAAS,CAAC;QACT,2EAA2E;QAC3E,MAAM,MAAM,CAAA;IACd,CAAC;AACH,CAAC"}
+diff --git a/dist/src/websocket-to-conn.d.ts b/dist/src/websocket-to-conn.d.ts
+index 6bac9e7cf91020ab7a613a4ae199ed0a54a403cf..1f5e7697344a0dc0afb9753e803579fc757ab840 100644
+--- a/dist/src/websocket-to-conn.d.ts
++++ b/dist/src/websocket-to-conn.d.ts
+@@ -5,5 +5,9 @@ export interface WebSocketMultiaddrConnectionInit extends Omit<AbstractMultiaddr
+     maxBufferedAmount?: number;
+     bufferedAmountPollInterval?: number;
+ }
+-export declare function webSocketToMaConn(init: WebSocketMultiaddrConnectionInit): MultiaddrConnection;
++export interface WebSocketMultiaddrConnection extends MultiaddrConnection {
++    /** Like the close event, resolves only at native socket exit; status/timeline.close are not exit evidence. */
++    readonly closed: Promise<void>;
++}
++export declare function webSocketToMaConn(init: WebSocketMultiaddrConnectionInit): WebSocketMultiaddrConnection;
+ //# sourceMappingURL=websocket-to-conn.d.ts.map
+diff --git a/dist/src/websocket-to-conn.d.ts.map b/dist/src/websocket-to-conn.d.ts.map
+index 47e4abb3621a3bd46f12675950285e9a4b1fdc27..361d5c83c7fcf8f39a726055760e137dce4ae9a1 100644
+--- a/dist/src/websocket-to-conn.d.ts.map
++++ b/dist/src/websocket-to-conn.d.ts.map
+@@ -1 +1 @@
+-{"version":3,"file":"websocket-to-conn.d.ts","sourceRoot":"","sources":["../../src/websocket-to-conn.ts"],"names":[],"mappings":"AAIA,OAAO,KAAK,EAAgB,mBAAmB,EAAE,MAAM,mBAAmB,CAAA;AAC1E,OAAO,KAAK,EAAE,+BAA+B,EAA6B,MAAM,eAAe,CAAA;AAK/F,MAAM,WAAW,gCAAiC,SAAQ,IAAI,CAAC,+BAA+B,EAAE,MAAM,CAAC;IACrG,SAAS,EAAE,SAAS,CAAA;IACpB,iBAAiB,CAAC,EAAE,MAAM,CAAA;IAC1B,0BAA0B,CAAC,EAAE,MAAM,CAAA;CACpC;AA4FD,wBAAgB,iBAAiB,CAAE,IAAI,EAAE,gCAAgC,GAAG,mBAAmB,CAE9F"}
+\ No newline at end of file
++{"version":3,"file":"websocket-to-conn.d.ts","sourceRoot":"","sources":["../../src/websocket-to-conn.ts"],"names":[],"mappings":"AAKA,OAAO,KAAK,EAAgB,mBAAmB,EAAE,MAAM,mBAAmB,CAAA;AAC1E,OAAO,KAAK,EAAE,+BAA+B,EAA6B,MAAM,eAAe,CAAA;AAK/F,MAAM,WAAW,gCAAiC,SAAQ,IAAI,CAAC,+BAA+B,EAAE,MAAM,CAAC;IACrG,SAAS,EAAE,SAAS,CAAA;IACpB,iBAAiB,CAAC,EAAE,MAAM,CAAA;IAC1B,0BAA0B,CAAC,EAAE,MAAM,CAAA;CACpC;AAED,MAAM,WAAW,4BAA6B,SAAQ,mBAAmB;IACvE,8GAA8G;IAC9G,QAAQ,CAAC,MAAM,EAAE,OAAO,CAAC,IAAI,CAAC,CAAA;CAC/B;AA0ID,wBAAgB,iBAAiB,CAAE,IAAI,EAAE,gCAAgC,GAAG,4BAA4B,CAEvG"}
+diff --git a/dist/src/websocket-to-conn.js b/dist/src/websocket-to-conn.js
+index d8de3805b120e140837c446f4edfd6421ca19230..942736b4b00c833618f18a23298b4828fa0f37ef 100644
+--- a/dist/src/websocket-to-conn.js
++++ b/dist/src/websocket-to-conn.js
+@@ -1,28 +1,39 @@
+ import { AbstractMultiaddrConnection, repeatingTask } from '@libp2p/utils';
+-import { Uint8ArrayList } from 'uint8arraylist';
+ import { fromString as uint8ArrayFromString } from 'uint8arrays/from-string';
+ import { withArrayBuffer } from 'uint8arrays/with-array-buffer';
++import { closeSocket, socketClosed } from "./socket-lifecycle.js";
+ const DEFAULT_MAX_BUFFERED_AMOUNT = 1024 * 1024 * 4;
+ const DEFAULT_BUFFERED_AMOUNT_POLL_INTERVAL = 10;
+-class WebSocketMultiaddrConnection extends AbstractMultiaddrConnection {
++class WebSocketMultiaddrConnectionImpl extends AbstractMultiaddrConnection {
++    closed;
+     websocket;
+     maxBufferedAmount;
+     checkBufferedAmountTask;
++    socketExited = false;
++    pendingClose;
+     constructor(init) {
+         super(init);
+         this.websocket = init.websocket;
++        this.closed = socketClosed(this.websocket);
+         this.maxBufferedAmount = init.maxBufferedAmount ?? DEFAULT_MAX_BUFFERED_AMOUNT;
+         this.checkBufferedAmountTask = repeatingTask(this.checkBufferedAmount.bind(this), init.bufferedAmountPollInterval ?? DEFAULT_BUFFERED_AMOUNT_POLL_INTERVAL);
+-        this.websocket.addEventListener('close', (evt) => {
++        const onClose = (evt) => {
++            this.socketExited = true;
+             this.log('closed - code %d, reason "%s", wasClean %s', evt.code, evt.reason, evt.wasClean);
+             this.checkBufferedAmountTask.stop();
++            this.websocket.removeEventListener('message', onMessage);
++            if (this.pendingClose != null) {
++                const event = this.pendingClose;
++                this.pendingClose = undefined;
++                super.dispatchEvent(event);
++            }
+             if (!evt.wasClean) {
+                 this.onRemoteReset();
+                 return;
+             }
+             this.onTransportClosed();
+-        }, { once: true });
+-        this.websocket.addEventListener('message', (evt) => {
++        };
++        const onMessage = (evt) => {
+             try {
+                 let buf;
+                 if (typeof evt.data === 'string') {
+@@ -39,8 +50,24 @@ class WebSocketMultiaddrConnection extends AbstractMultiaddrConnection {
+             }
+             catch (err) {
+                 this.log.error('error receiving data - %e', err);
++                this.abort(err);
+             }
+-        });
++        };
++        if (this.websocket.readyState === 3) {
++            this.socketExited = true;
++            this.onRemoteReset();
++            return;
++        }
++        this.websocket.addEventListener('close', onClose, { once: true });
++        this.websocket.addEventListener('message', onMessage);
++    }
++    dispatchEvent(event) {
++        if (event.type === 'close' && !this.socketExited && this.websocket?.readyState !== 3) {
++            // Connection relays this event to topology disconnect observers.
++            this.pendingClose ??= event;
++            return true;
++        }
++        return super.dispatchEvent(event);
+     }
+     sendData(data) {
+         for (const buf of data) {
+@@ -56,10 +83,26 @@ class WebSocketMultiaddrConnection extends AbstractMultiaddrConnection {
+         };
+     }
+     sendReset() {
+-        this.websocket.close(1006); // abnormal closure
++        this.checkBufferedAmountTask.stop();
++        // 1006 is an observation-only code, not a legal browser close argument.
++        if (this.websocket.readyState < 2) {
++            this.websocket.close();
++        }
++    }
++    async close(options) {
++        try {
++            await super.close(options);
++        }
++        catch (err) {
++            this.abort(err);
++            throw err;
++        }
++        finally {
++            await this.closed;
++        }
+     }
+     async sendClose(options) {
+-        this.websocket.close();
++        await closeSocket(this.websocket);
+         options?.signal?.throwIfAborted();
+     }
+     sendPause() {
+@@ -79,6 +122,6 @@ class WebSocketMultiaddrConnection extends AbstractMultiaddrConnection {
+ // Convert a stream into a MultiaddrConnection
+ // https://github.com/libp2p/interface-transport#multiaddrconnection
+ export function webSocketToMaConn(init) {
+-    return new WebSocketMultiaddrConnection(init);
++    return new WebSocketMultiaddrConnectionImpl(init);
+ }
+ //# sourceMappingURL=websocket-to-conn.js.map
+diff --git a/dist/src/websocket-to-conn.js.map b/dist/src/websocket-to-conn.js.map
+index b9a7032a1b1fceea8d0ec09c00bf3ad2b3f478d0..7f9df384dd6e2930e5cd29a6e6337f02852f247e 100644
+--- a/dist/src/websocket-to-conn.js.map
++++ b/dist/src/websocket-to-conn.js.map
+@@ -1 +1 @@
+-{"version":3,"file":"websocket-to-conn.js","sourceRoot":"","sources":["../../src/websocket-to-conn.ts"],"names":[],"mappings":"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"}
+\ No newline at end of file
++{"version":3,"file":"websocket-to-conn.js","sourceRoot":"","sources":["../../src/websocket-to-conn.ts"],"names":[],"mappings":"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"}
+diff --git a/src/index.ts b/src/index.ts
+index c69eb338d13efa569f8b2232c833965af04ecb01..ac014e7fa2f7b5ea6137d14ef9c2eee294c57de0 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -26,10 +26,11 @@
+ import { transportSymbol, serviceCapabilities, ConnectionFailedError } from '@libp2p/interface'
+ import { WebSockets as WebSocketsMatcher, WebSocketsSecure } from '@multiformats/multiaddr-matcher'
+ import { multiaddrToUri as toUri } from '@multiformats/multiaddr-to-uri'
+-import { pEvent } from 'p-event'
+ import { CustomProgressEvent } from 'progress-events'
+ import { createListener } from './listener.ts'
++import { closeSocket } from './socket-lifecycle.ts'
+ import { webSocketToMaConn } from './websocket-to-conn.ts'
++import type { WebSocketMultiaddrConnection } from './websocket-to-conn.ts'
+ import type { Transport, CreateListenerOptions, DialTransportOptions, Listener, AbortOptions, ComponentLogger, Logger, Connection, OutboundConnectionUpgradeEvents, Metrics, CounterGroup, Libp2pEvents } from '@libp2p/interface'
+ import type { Multiaddr } from '@multiformats/multiaddr'
+ import type { TypedEventTarget } from 'main-event'
+@@ -37,7 +38,15 @@ import type http from 'node:http'
+ import type https from 'node:https'
+ import type { ProgressEvent } from 'progress-events'
+ 
++export type { WebSocketMultiaddrConnection } from './websocket-to-conn.ts'
++
+ export interface WebSocketsInit extends AbortOptions {
++  /**
++   * Receives each outbound raw connection before upgrade. Its `closed` promise
++   * tracks native socket exit, independently of logical stream abort/close.
++   */
++  onConnection?: (connection: WebSocketMultiaddrConnection) => void
++
+   /**
+    * Options used to create the HTTP server
+    */
+@@ -129,9 +138,23 @@ class WebSockets implements Transport<WebSocketsDialEvents> {
+     })
+     this.log('new outbound connection %s', maConn.remoteAddr)
+ 
+-    const conn = await options.upgrader.upgradeOutbound(maConn, options)
+-    this.log('outbound connection %s upgraded', maConn.remoteAddr)
+-    return conn
++    try {
++      this.init.onConnection?.(maConn)
++      options.signal?.throwIfAborted()
++
++      if (maConn.status !== 'open') {
++        throw new ConnectionFailedError(`Could not connect to ${ma}`)
++      }
++
++      const conn = await options.upgrader.upgradeOutbound(maConn, options)
++      options.signal?.throwIfAborted()
++      this.log('outbound connection %s upgraded', maConn.remoteAddr)
++      return conn
++    } catch (err: any) {
++      maConn.abort(err)
++      await maConn.closed
++      throw err
++    }
+   }
+ 
+   async _connect (ma: Multiaddr, options: DialTransportOptions<WebSocketsDialEvents>): Promise<WebSocket> {
+@@ -142,22 +165,51 @@ class WebSockets implements Transport<WebSocketsDialEvents> {
+     const websocket = new WebSocket(uri)
+     websocket.binaryType = 'arraybuffer'
+ 
++    let cleanup = (): void => {}
++
+     try {
+-      options.onProgress?.(new CustomProgressEvent('websockets:open-connection'))
+-      await pEvent(websocket, 'open', options)
++      await new Promise<void>((resolve, reject) => {
++        const onOpen = (): void => { resolve() }
++        const onError = (event: Event): void => { reject(event) }
++        const onClose = (): void => { reject(new ConnectionFailedError(`Could not connect to ${uri}`)) }
++        const onAbort = (): void => { reject(options.signal?.reason) }
++        cleanup = () => {
++          websocket.removeEventListener('open', onOpen)
++          websocket.removeEventListener('error', onError)
++          websocket.removeEventListener('close', onClose)
++          options.signal?.removeEventListener('abort', onAbort)
++        }
++        websocket.addEventListener('open', onOpen)
++        websocket.addEventListener('error', onError)
++        websocket.addEventListener('close', onClose)
++        options.signal?.addEventListener('abort', onAbort, { once: true })
++        options.signal?.throwIfAborted()
++        options.onProgress?.(new CustomProgressEvent('websockets:open-connection'))
++      })
++      options.signal?.throwIfAborted()
++
++      if (websocket.readyState !== 1) {
++        throw new ConnectionFailedError(`Could not connect to ${uri}`)
++      }
+     } catch (err: any) {
++      cleanup()
++      const error = options.signal?.aborted ? new ConnectionFailedError(`Could not connect to ${uri}`) : err
++
+       if (options.signal?.aborted) {
+         this.metrics?.dialerEvents.increment({ abort: true })
+-        throw new ConnectionFailedError(`Could not connect to ${uri}`)
+       } else {
+         this.metrics?.dialerEvents.increment({ error: true })
+       }
+ 
+       try {
+-        websocket.close()
+-      } catch {}
++        await closeSocket(websocket)
++      } catch (closeError) {
++        this.log.error('error closing failed handshake - %e', closeError)
++      }
+ 
+-      throw err
++      throw error
++    } finally {
++      cleanup()
+     }
+ 
+     this.log('connected %s', ma)
+diff --git a/src/socket-lifecycle.ts b/src/socket-lifecycle.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..e370849eeaee0e92cfece39fc47f5cd6cb57a2ef
+--- /dev/null
++++ b/src/socket-lifecycle.ts
+@@ -0,0 +1,33 @@
++const closedSockets = new WeakMap<WebSocket, Promise<void>>()
++
++/** Resolves only when the native socket is CLOSED or has emitted close. */
++export function socketClosed (websocket: WebSocket): Promise<void> {
++  let closed = closedSockets.get(websocket)
++
++  if (closed == null) {
++    closed = new Promise<void>((resolve) => {
++      if (websocket.readyState === 3) {
++        resolve()
++        return
++      }
++
++      websocket.addEventListener('close', () => { resolve() }, { once: true })
++    })
++    closedSockets.set(websocket, closed)
++  }
++
++  return closed
++}
++
++export async function closeSocket (websocket: WebSocket): Promise<void> {
++  const closed = socketClosed(websocket)
++
++  try {
++    if (websocket.readyState < 2) {
++      websocket.close()
++    }
++  } finally {
++    // A failed close call is not evidence that the native resource has exited.
++    await closed
++  }
++}
+diff --git a/src/websocket-to-conn.ts b/src/websocket-to-conn.ts
+index 80ca8aed56c79141a449ccd1377e32ad6cc7c3b5..654bf92a79853b2f5fa9ca22b0147150d4ff9768 100644
+--- a/src/websocket-to-conn.ts
++++ b/src/websocket-to-conn.ts
+@@ -2,6 +2,7 @@ import { AbstractMultiaddrConnection, repeatingTask } from '@libp2p/utils'
+ import { Uint8ArrayList } from 'uint8arraylist'
+ import { fromString as uint8ArrayFromString } from 'uint8arrays/from-string'
+ import { withArrayBuffer } from 'uint8arrays/with-array-buffer'
++import { closeSocket, socketClosed } from './socket-lifecycle.ts'
+ import type { AbortOptions, MultiaddrConnection } from '@libp2p/interface'
+ import type { AbstractMultiaddrConnectionInit, RepeatingTask, SendResult } from '@libp2p/utils'
+ 
+@@ -14,21 +15,38 @@ export interface WebSocketMultiaddrConnectionInit extends Omit<AbstractMultiaddr
+   bufferedAmountPollInterval?: number
+ }
+ 
+-class WebSocketMultiaddrConnection extends AbstractMultiaddrConnection {
++export interface WebSocketMultiaddrConnection extends MultiaddrConnection {
++  /** Like the close event, resolves only at native socket exit; status/timeline.close are not exit evidence. */
++  readonly closed: Promise<void>
++}
++
++class WebSocketMultiaddrConnectionImpl extends AbstractMultiaddrConnection implements WebSocketMultiaddrConnection {
++  readonly closed: Promise<void>
+   private websocket: WebSocket
+   private maxBufferedAmount: number
+   private checkBufferedAmountTask: RepeatingTask
++  private socketExited = false
++  private pendingClose?: Event
+ 
+   constructor (init: WebSocketMultiaddrConnectionInit) {
+     super(init)
+ 
+     this.websocket = init.websocket
++    this.closed = socketClosed(this.websocket)
+     this.maxBufferedAmount = init.maxBufferedAmount ?? DEFAULT_MAX_BUFFERED_AMOUNT
+     this.checkBufferedAmountTask = repeatingTask(this.checkBufferedAmount.bind(this), init.bufferedAmountPollInterval ?? DEFAULT_BUFFERED_AMOUNT_POLL_INTERVAL)
+ 
+-    this.websocket.addEventListener('close', (evt) => {
++    const onClose = (evt: CloseEvent): void => {
++      this.socketExited = true
+       this.log('closed - code %d, reason "%s", wasClean %s', evt.code, evt.reason, evt.wasClean)
+       this.checkBufferedAmountTask.stop()
++      this.websocket.removeEventListener('message', onMessage)
++
++      if (this.pendingClose != null) {
++        const event = this.pendingClose
++        this.pendingClose = undefined
++        super.dispatchEvent(event)
++      }
+ 
+       if (!evt.wasClean) {
+         this.onRemoteReset()
+@@ -36,9 +54,9 @@ class WebSocketMultiaddrConnection extends AbstractMultiaddrConnection {
+       }
+ 
+       this.onTransportClosed()
+-    }, { once: true })
++    }
+ 
+-    this.websocket.addEventListener('message', (evt) => {
++    const onMessage = (evt: MessageEvent): void => {
+       try {
+         let buf: Uint8Array
+ 
+@@ -54,8 +72,27 @@ class WebSocketMultiaddrConnection extends AbstractMultiaddrConnection {
+         this.onData(buf)
+       } catch (err: any) {
+         this.log.error('error receiving data - %e', err)
++        this.abort(err)
+       }
+-    })
++    }
++    if (this.websocket.readyState === 3) {
++      this.socketExited = true
++      this.onRemoteReset()
++      return
++    }
++
++    this.websocket.addEventListener('close', onClose, { once: true })
++    this.websocket.addEventListener('message', onMessage)
++  }
++
++  dispatchEvent (event: Event): boolean {
++    if (event.type === 'close' && !this.socketExited && this.websocket?.readyState !== 3) {
++      // Connection relays this event to topology disconnect observers.
++      this.pendingClose ??= event
++      return true
++    }
++
++    return super.dispatchEvent(event)
+   }
+ 
+   sendData (data: Uint8ArrayList): SendResult {
+@@ -76,11 +113,26 @@ class WebSocketMultiaddrConnection extends AbstractMultiaddrConnection {
+   }
+ 
+   sendReset (): void {
+-    this.websocket.close(1006) // abnormal closure
++    this.checkBufferedAmountTask.stop()
++    // 1006 is an observation-only code, not a legal browser close argument.
++    if (this.websocket.readyState < 2) {
++      this.websocket.close()
++    }
++  }
++
++  async close (options?: AbortOptions): Promise<void> {
++    try {
++      await super.close(options)
++    } catch (err: any) {
++      this.abort(err)
++      throw err
++    } finally {
++      await this.closed
++    }
+   }
+ 
+   async sendClose (options?: AbortOptions): Promise<void> {
+-    this.websocket.close()
++    await closeSocket(this.websocket)
+     options?.signal?.throwIfAborted()
+   }
+ 
+@@ -104,6 +156,6 @@ class WebSocketMultiaddrConnection extends AbstractMultiaddrConnection {
+ 
+ // Convert a stream into a MultiaddrConnection
+ // https://github.com/libp2p/interface-transport#multiaddrconnection
+-export function webSocketToMaConn (init: WebSocketMultiaddrConnectionInit): MultiaddrConnection {
+-  return new WebSocketMultiaddrConnection(init)
++export function webSocketToMaConn (init: WebSocketMultiaddrConnectionInit): WebSocketMultiaddrConnection {
++  return new WebSocketMultiaddrConnectionImpl(init)
+ }

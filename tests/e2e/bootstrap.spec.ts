@@ -1,4 +1,5 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
+import { openPanel } from './gallery-ui'
 
 test('static startup shell remains readable while the application module loads', async ({ page }) => {
   let release!: () => void
@@ -27,6 +28,8 @@ test('static startup shell remains readable while the application module loads',
   } finally {
     release()
   }
+  await expect(page.locator('.app-shell')).toBeVisible()
+  if (!await page.getByRole('textbox', { name: 'CID 或 IPFS 地址', exact: true }).isVisible()) await openPanel(page, 'source')
   await expect(page.getByRole('textbox', { name: 'CID 或 IPFS 地址', exact: true })).toBeVisible()
   const dialog = page.getByRole('dialog')
   const heading = dialog.getByRole('heading', { level: 2 })
@@ -38,8 +41,8 @@ test('static startup shell remains readable while the application module loads',
   expect(errors).toEqual([])
 })
 
-test('the static page explains the JavaScript requirement without loading remote media', async ({ browser, baseURL }) => {
-  const context = await browser.newContext({ javaScriptEnabled: false })
+test('the static page explains the JavaScript requirement without loading remote media', async ({ browser, baseURL, proxy }) => {
+  const context = await browser.newContext({ javaScriptEnabled: false, proxy })
   try {
     const page = await context.newPage()
     const remoteRequests: string[] = []

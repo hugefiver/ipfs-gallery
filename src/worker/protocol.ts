@@ -65,7 +65,7 @@ function contentRef(value: unknown, normalizers: Normalizers): ContentRef {
   return { cid: normalizers.normalizeContentRef(value.cid).cid, path: [...value.path as string[]] }
 }
 
-function config(value: unknown, normalizers: Normalizers): SessionConfig {
+export function parseSessionConfig(value: unknown, normalizers: Normalizers): SessionConfig {
   shape(value, ['gateways', 'limits'])
   const keys = Object.keys(DEFAULT_LIMITS) as (keyof ResourceLimits)[]
   shape(value.limits, keys)
@@ -117,7 +117,7 @@ export function parseRequest(value: unknown, normalizers: Normalizers): WorkerRe
   switch (value.type) {
     case 'discover': {
       shape(value, ['type', 'sessionId', 'requestId', 'input', 'config'])
-      const normalizedConfig = config(value.config, normalizers)
+      const normalizedConfig = parseSessionConfig(value.config, normalizers)
       return { type: 'discover', ...ids, config: normalizedConfig,
         input: input(value.input, normalizedConfig.limits, normalizers) }
     }

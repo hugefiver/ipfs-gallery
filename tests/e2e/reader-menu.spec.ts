@@ -15,13 +15,12 @@ async function verifyMenuPng(page: Page, testInfo: TestInfo, name: string, alpha
     const menu = document.querySelector<HTMLButtonElement>('.reader-menu-trigger')!
     const style = getComputedStyle(menu)
     const box = menu.getBoundingClientRect()
-    const image = new Image()
-    image.src = `data:image/png;base64,${base64}`
-    await image.decode()
+    const image = await createImageBitmap(new Blob([Uint8Array.from(atob(base64), character => character.charCodeAt(0))], { type: 'image/png' }))
     const canvas = document.createElement('canvas')
     canvas.width = image.width; canvas.height = image.height
     const context = canvas.getContext('2d')!
     context.drawImage(image, 0, 0)
+    image.close()
     const x = Math.round(box.x + 8), y = Math.round(box.y + 8)
     const actual = Array.from(context.getImageData(x, y, 1, 1).data).slice(0, 3)
     context.clearRect(0, 0, canvas.width, canvas.height)

@@ -1,4 +1,4 @@
-import { expect, type Locator, type Page, type TestInfo } from '@playwright/test'
+import { expect, type BrowserContext, type Locator, type Page, type TestInfo } from '@playwright/test'
 
 type ToolPanel = 'source' | 'filters' | 'info' | 'network'
 const panelNames: Record<ToolPanel, RegExp> = { source: /^来源(?: \(部分可用\))?$/, filters: /^搜索与筛选$/, info: /^当前影像信息$/, network: /^网络$/ }
@@ -9,7 +9,7 @@ declare global {
   }
 }
 
-export async function observeVerifiedBlobs(page: Page): Promise<void> {
+export async function observeVerifiedBlobs(page: Page | BrowserContext): Promise<void> {
   await page.addInitScript(() => {
     const blobs = new Map<string, Blob>()
     window.mediaTestBlobs = blobs
@@ -66,7 +66,7 @@ export const ui = {
   resetZoom: (page: Page) => page.getByRole('button', { name: '复位图片', exact: true }),
   readerInfo: (page: Page) => ui.dialog(page).getByRole('button', { name: '影像详情', exact: true }),
   readerTools: (page: Page) => page.getByRole('dialog', { name: '阅读工具', exact: true }),
-  download: (scope: Locator) => scope.getByRole('button', { name: '下载经过验证的原始媒体', exact: true }),
+  download: (scope: Locator, name = '下载经过验证的原始媒体') => scope.getByRole('button', { name, exact: true }),
   settingsDialog: (page: Page) => page.getByRole('dialog', { name: '网络与浏览器偏好', exact: true }),
   gateways: (dialog: Locator) => dialog.getByRole('textbox', { name: /^网关 \d+ HTTPS 地址$/ }),
   saveSettings: (dialog: Locator) => dialog.getByRole('button', { name: '应用并重新读取', exact: true }),
@@ -153,25 +153,25 @@ export async function expectVideoBytes(video: Locator, expected: Uint8Array): Pr
   expect(await video.evaluate((element: HTMLVideoElement) => ({ paused: element.paused, autoplay: element.autoplay, width: element.videoWidth, height: element.videoHeight })))
     .toEqual({ paused: true, autoplay: false, width: 32, height: 24 })
   const actual = await video.evaluate(verifiedMediaBytes)
-  expect(Uint8Array.from(actual)).toEqual(expected)
+  expect(Buffer.from(actual).equals(Buffer.from(expected))).toBe(true)
 }
 
 export async function expectImageBytes(image: Locator, expected: Uint8Array): Promise<void> {
   await expect(image).toBeVisible({ timeout: 30_000 })
   await expect.poll(() => image.evaluate(element => (element as HTMLImageElement).complete && (element as HTMLImageElement).naturalWidth > 0), { timeout: 30_000 }).toBe(true)
   const actual = await image.evaluate(verifiedMediaBytes)
-  expect(Uint8Array.from(actual)).toEqual(expected)
+  expect(Buffer.from(actual).equals(Buffer.from(expected))).toBe(true)
 }
 
-export async function expectDownloadBytes(page: Page, scope: Locator, expected: Uint8Array): Promise<void> {
+export async function expectDownloadBytes(page: Page, scope: Locator, expected: Uint8Array, downloadName = '下载经过验证的原始媒体'): Promise<void> {
   const pending = page.waitForEvent('download')
-  await ui.download(scope).click()
+  await ui.download(scope, downloadName).click()
   const download = await pending
   expect(await download.failure()).toBeNull()
   const stream = await download.createReadStream()
   const chunks: Buffer[] = []
   for await (const chunk of stream) chunks.push(Buffer.from(chunk))
-  expect(new Uint8Array(Buffer.concat(chunks))).toEqual(expected)
+  expect(Buffer.concat(chunks).equals(Buffer.from(expected))).toBe(true)
   expect(Array.from(download.suggestedFilename()).some(character => character === '/' || character === '\\' || character.charCodeAt(0) < 32)).toBe(false)
 }
 

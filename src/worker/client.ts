@@ -9,6 +9,11 @@ import type {
 import { GalleryDomainError } from '../shared/errors'
 import { DEFAULT_LIMITS } from '../shared/limits'
 import { MAX_PENDING_REQUESTS, MAX_REQUEST_IDS, record, validIdentity } from './protocol'
+import { attachWindowBlockBridge, BRIDGE_FAULT, BRIDGE_OPEN } from './block-bridge'
+import { WindowOwnership } from '../service-worker/ownership'
+import type { WindowSourceEnvironment } from '../service-worker/window-source'
+import { VERSION } from '../service-worker/protocol'
+import { reject } from '../service-worker/rpc'
 
 type Event = Extract<WorkerResponse, { type: 'progress' | 'telemetry' }>
 type Value = GalleryResult | VerifiedAsset | null
@@ -35,19 +40,27 @@ const limit = (): GalleryDomainError => new GalleryDomainError({
 /** Resolving an asset precedes releasing its slot, so synchronous consumers run before the next send. */
 export function createGalleryClient(workerFactory: () => Worker = () => new Worker(
   new URL('./gallery.worker.ts', import.meta.url), { type: 'module' },
-)): GalleryClient {
+), bridgeEnvironment?: () => WindowSourceEnvironment): GalleryClient {
   let worker: Worker | undefined
   let cleanup: (() => void) | undefined
   let activeSession: string | undefined
   let closed = false
   let sentAssets = 0
   let pumpScheduled = false
+  let recovery: Promise<void> | undefined
   const pending = new Map<string, Pending>()
   const seen = new Set<string>()
   const queue: Pending[] = []
   const listeners = new Set<(event: Event) => void>()
+  const bridges = new Set<() => void>()
+  const relay = { count: 0, bytes: 0 }
+  const ownership = new WindowOwnership(() => {
+    queueMicrotask(() => { if (worker && ownership.quarantined) crashed() })
+  })
 
   function terminate(): void {
+    for (const close of bridges) close()
+    bridges.clear()
     cleanup?.()
     cleanup = undefined
     worker?.terminate()
@@ -59,10 +72,11 @@ export function createGalleryClient(workerFactory: () => Worker = () => new Work
     pending.clear()
     queue.length = 0
     // Held successful results still release their own slot in the next microtask.
-    sentAssets = 0
+    if (!ownership.quarantined) sentAssets = 0
   }
 
   function crashed(): void {
+    ownership.retire()
     terminate()
     activeSession = undefined
     settleAll(failure())
@@ -88,7 +102,7 @@ export function createGalleryClient(workerFactory: () => Worker = () => new Work
   }
 
   function pump(): void {
-    while (!closed && sentAssets < DEFAULT_LIMITS.maxAssetConcurrency && queue.length > 0) {
+    while (!closed && !ownership.quarantined && sentAssets < DEFAULT_LIMITS.maxAssetConcurrency && queue.length > 0) {
       const task = queue.shift()!
       if (!pending.has(task.request.requestId)) continue
       if (task.request.sessionId !== activeSession) {
@@ -135,8 +149,10 @@ export function createGalleryClient(workerFactory: () => Worker = () => new Work
     }
     releaseAsset(task, source)
     if (task.request.type === 'dispose') {
+      ownership.retire()
       settleAll(cancellation())
       terminate()
+      void ownership.recover().catch(() => {})
       listeners.clear()
     }
   }
@@ -145,15 +161,40 @@ export function createGalleryClient(workerFactory: () => Worker = () => new Work
     if (worker) return worker
     const created = workerFactory()
     worker = created
-    const onMessage = (event: MessageEvent<unknown>): void => message(created, event.data)
+    const onMessage = (event: MessageEvent<unknown>): void => {
+      if (created === worker && record(event.data) && event.data.type === BRIDGE_FAULT
+        && event.data.v === VERSION && validIdentity(event.data.sessionId)
+        && Object.keys(event.data).length === 3 && event.ports.length === 0) { crashed(); return }
+      if (created === worker && record(event.data) && event.data.type === BRIDGE_OPEN) {
+        const port = event.ports?.[0]
+        if (!port || event.ports.length !== 1 || bridges.size >= 8) {
+          for (const rejected of event.ports) {
+            reject(rejected, 0, event.ports.length !== 1 ? invalid() : limit())
+            rejected.close()
+          }
+          return
+        }
+        try {
+          const close = attachWindowBlockBridge(event.data, port, bridgeEnvironment, () => bridges.delete(close), relay, ownership)
+          bridges.add(close)
+        } catch (error) { reject(port, 0, error); port.close() }
+        return
+      }
+      message(created, event.data)
+    }
     const onFailure = (): void => { if (worker === created) crashed() }
     created.addEventListener('message', onMessage)
     created.addEventListener('error', onFailure)
     created.addEventListener('messageerror', onFailure)
+    const onPageHide = (): void => {
+      crashed()
+    }
+    if (typeof window !== 'undefined') window.addEventListener('pagehide', onPageHide)
     cleanup = () => {
       created.removeEventListener('message', onMessage)
       created.removeEventListener('error', onFailure)
       created.removeEventListener('messageerror', onFailure)
+      if (typeof window !== 'undefined') window.removeEventListener('pagehide', onPageHide)
     }
     return created
   }
@@ -198,17 +239,33 @@ export function createGalleryClient(workerFactory: () => Worker = () => new Work
     }
   }
 
+  function readable<T>(read: () => Promise<T>): Promise<T> {
+    if (!worker && !ownership.quarantined) sentAssets = 0
+    if (closed || (!ownership.quarantined && !recovery)) return read()
+    if (!recovery) {
+      const attempt = ownership.recover().then(() => {
+        // Recovery revoked the old admission; never replay its business requests.
+        terminate(); activeSession = undefined; settleAll(failure()); sentAssets = 0
+      })
+      recovery = attempt
+      void attempt.finally(() => { if (recovery === attempt) recovery = undefined }).catch(() => {})
+    }
+    return recovery.then(read)
+  }
+
   return {
     discover(request) {
+      return readable(() => {
       if (closed || !validIdentity(request.sessionId) || !validIdentity(request.requestId)
         || seen.has(request.requestId)) return Promise.reject(closed ? cancellation() : invalid())
       if (atCapacity(request.type)) return Promise.reject(limit())
       if (activeSession !== undefined) cancelQueued(activeSession)
       activeSession = request.sessionId
       return register(request) as Promise<GalleryResult>
+      })
     },
     loadAsset(request) {
-      return register(request) as Promise<VerifiedAsset>
+      return readable(() => register(request) as Promise<VerifiedAsset>)
     },
     cancel(request) {
       if (closed || !validIdentity(request.sessionId) || !validIdentity(request.requestId)
@@ -216,12 +273,24 @@ export function createGalleryClient(workerFactory: () => Worker = () => new Work
         || seen.has(request.requestId)) return Promise.reject(closed ? cancellation() : invalid())
       if (atCapacity(request.type)) return Promise.reject(limit())
       cancelQueued(request.sessionId, request.targetRequestId)
+      if (ownership.quarantined) {
+        seen.add(request.requestId)
+        const target = pending.get(request.targetRequestId)
+        if (target?.request.sessionId === request.sessionId) { pending.delete(request.targetRequestId); target.reject(cancellation()) }
+        return Promise.resolve()
+      }
       return register(request).then(() => undefined)
     },
     dispose(request) {
       if (closed) return Promise.resolve()
       if (!validIdentity(request.sessionId) || !validIdentity(request.requestId)
         || seen.has(request.requestId)) return Promise.reject(invalid())
+      if (ownership.quarantined) {
+        seen.add(request.requestId); closed = true
+        settleAll(cancellation()); terminate(); listeners.clear()
+        void ownership.recover().catch(() => {})
+        return Promise.resolve()
+      }
       const promise = register(request)
       if (!pending.has(request.requestId)) return promise.then(() => undefined)
       for (const task of [...queue]) cancelQueued(task.request.sessionId, task.request.requestId)

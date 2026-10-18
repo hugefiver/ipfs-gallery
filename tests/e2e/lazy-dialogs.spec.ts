@@ -2,8 +2,10 @@ import type { Page, Request } from '@playwright/test'
 import { test, expect } from './fixtures'
 import { sourceUrl } from './gateway-route'
 import { ui, openPanel, expectReaderImage } from './gallery-ui'
+import { SW_GALLERY_BROWSER_ARGS } from '../support/sw-gallery-network'
 
-test.use({ launchOptions: { ignoreDefaultArgs: ['--hide-scrollbars'], args: ['--disable-features=OverlayScrollbar'] } })
+test.use({ launchOptions: { ignoreDefaultArgs: ['--hide-scrollbars'], args: SW_GALLERY_BROWSER_ARGS.map(argument =>
+  argument.startsWith('--disable-features=') ? `${argument},OverlayScrollbar` : argument) } })
 type ModuleOutcome = 'success' | 'failure'
 const modulePattern = /\/(?:assets\/NetworkSettings-[^/]+\.js|src\/components\/NetworkSettings\.tsx)(?:\?.*)?$/
 

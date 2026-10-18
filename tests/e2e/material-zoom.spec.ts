@@ -5,12 +5,12 @@ import { mkdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname } from 'node:path'
 
 const nativeZoomTest = test.extend({
-  context: async ({ playwright, headless }, use, testInfo) => {
+  context: async ({ playwright, headless, network }, use, testInfo) => {
     const profile = testInfo.outputPath('owned-browser-profile')
     await mkdir(profile)
     let context: BrowserContext | undefined
     try {
-      context = await playwright.chromium.launchPersistentContext(profile, { channel: 'chrome', headless, viewport: { width: 2000, height: 1125 }, deviceScaleFactor: 1, serviceWorkers: 'block', args: ['--disable-extensions', '--disable-sync'] })
+      context = await playwright.chromium.launchPersistentContext(profile, { channel: 'chrome', headless, viewport: { width: 2000, height: 1125 }, deviceScaleFactor: 1, serviceWorkers: 'allow', baseURL: network.baseURL, args: ['--disable-extensions', '--disable-sync', ...network.chromiumArgs] })
       await use(context)
     } finally {
       await context?.close()

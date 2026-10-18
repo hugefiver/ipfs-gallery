@@ -1,0 +1,5 @@
+allowUnusedPatches: false
+patchedDependencies:
+  '@helia/bitswap@4.0.20': patches/@helia__bitswap@4.0.20.patch
+  '@libp2p/websockets@10.1.14': patches/@libp2p__websockets@10.1.14.patch
+  '@libp2p/yamux@8.0.3': patches/@libp2p__yamux@8.0.3.patch

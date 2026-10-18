@@ -15,6 +15,7 @@ import ListItemButton from '@mui/material/ListItemButton'
 import Divider from '@mui/material/Divider'
 import type { GalleryMode, GalleryPanel, ReaderAssetBinding } from '../app/readerAlbumTypes'
 import type { GalleryItem, ParsedLocation, ViewState } from '../shared/contracts'
+import { BUILD_POLICY } from '../shared/build-policy'
 import type { GallerySnapshot } from '../hooks/galleryController'
 import type { GalleryPreferencesController } from '../hooks/useGalleryPreferences'
 import { contentAddress, sourceAddresses } from '../app/format'
@@ -76,9 +77,9 @@ export function GalleryInfoPanel({ item, asset, notice, onCopy }: { item: Galler
   return <div className="gallery-info"><h3>{item.title}</h3>{item.alt && <p className="description">{item.alt}</p>}
     <dl><dt>来源</dt><dd>{item.sourceLabel}</dd><dt>原始内容地址</dt><dd className="cid">{contentAddress(item.ref)}</dd><dt>CID</dt><dd className="cid">{item.ref.cid}</dd>
       {!!item.tags.length && <><dt>标签</dt><dd>{item.tags.join(' / ')}</dd></>}
-      {verified && <><dt>已验证原始媒体</dt><dd>{verified.mime} · {verified.byteLength.toLocaleString('zh-CN')} 字节{verified.width && verified.height ? ` · ${verified.width} × ${verified.height}` : ''}</dd></>}
+      {verified && <><dt>{BUILD_POLICY.trustless ? '已验证原始媒体' : '原始媒体'}</dt><dd>{verified.mime} · {verified.byteLength.toLocaleString('zh-CN')} 字节{verified.width && verified.height ? ` · ${verified.width} × ${verified.height}` : ''}</dd></>}
     </dl>
-    <p className="help">{verified ? '已在本地完成哈希校验，可直接下载。' : '正在等待媒体验证。'}</p>
+    <p className="help">{verified ? (BUILD_POLICY.trustless ? '已在本地完成哈希校验，可直接下载。' : '原始媒体已准备，可下载。') : (BUILD_POLICY.trustless ? '正在等待媒体验证。' : '正在等待原始媒体。')}</p>
     <div className="actions panel-actions"><Action onClick={() => onCopy(item.ref.cid, ' CID')}>复制 CID</Action><Action onClick={() => onCopy(contentAddress(item.ref), '原始地址')}>复制原始地址</Action></div>
     {notice && <p className="panel-notice" role="status">{notice}</p>}
   </div>

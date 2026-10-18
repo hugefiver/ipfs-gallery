@@ -121,12 +121,15 @@ for (const width of [320, 375, 768, 1280, 2000]) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await screenshot(page, testInfo, `empty-source-${width}`)
     const png = await page.screenshot()
-    const pixels = await page.evaluate(async base64 => {
-      const image = new Image(); image.src = `data:image/png;base64,${base64}`; await image.decode()
-      const canvas = document.createElement('canvas'); canvas.width = image.width; canvas.height = image.height
-      const context = canvas.getContext('2d')!; context.drawImage(image, 0, 0)
-      return { sidebar: Array.from(context.getImageData(3, Math.floor(image.height * .7), 1, 1).data), main: Array.from(context.getImageData(image.width - 5, Math.floor(image.height * .5), 1, 1).data) }
-    }, png.toString('base64'))
+    const pixels = await page.evaluate(async bytes => {
+      const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: 'image/png' }))
+      try {
+        const image = new Image(); image.src = url; await image.decode()
+        const canvas = document.createElement('canvas'); canvas.width = image.width; canvas.height = image.height
+        const context = canvas.getContext('2d')!; context.drawImage(image, 0, 0)
+        return { sidebar: Array.from(context.getImageData(3, Math.floor(image.height * .7), 1, 1).data), main: Array.from(context.getImageData(image.width - 5, Math.floor(image.height * .5), 1, 1).data) }
+      } finally { URL.revokeObjectURL(url) }
+    }, Array.from(png))
     for (let channel = 0; channel < 3; channel += 1) {
       const composite = Math.round(255 * .9 + pixels.main[channel]! * .1)
       expect(Math.abs(pixels.sidebar[channel]! - composite)).toBeLessThanOrEqual(2)
@@ -166,15 +169,12 @@ for (const width of [375, 768, 1280]) {
 }
 
 for (const motion of ['180ms', '.18s']) {
-test(`normal close keeps integral 320px toolbar and body paint with ${motion}; rapid reopen retains the new active panel`, async ({ page, previewFixtures, baseURL }, testInfo) => {
+test(`normal close keeps integral 320px toolbar and body paint with ${motion}; rapid reopen retains the new active panel`, async ({ page, previewFixtures }, testInfo) => {
   await page.clock.install()
   await page.emulateMedia({ reducedMotion: 'no-preference' })
-  await page.route(url => url.origin === new URL(baseURL!).origin && url.pathname === '/', async route => {
-    const response = await route.fetch()
-    await route.fulfill({ response, body: (await response.text()).replace('<head>', `<head><style>:root { --motion-panel: ${motion} !important; }</style>`) })
-  })
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.goto(sourceUrl('meta', previewFixtures.manifest.ref))
+  await page.evaluate(value => document.documentElement.style.setProperty('--motion-panel', value, 'important'), motion)
   await expectReaderImage(page, previewFixtures.items[0]!.original.bytes)
   await openMenu(page)
   await expect.poll(async () => (await ui.dialog(page).locator('.gallery-drawer-surface').boundingBox())?.x).toBe(0)
