@@ -11,6 +11,7 @@
   --surface-reader-menu-pressed: #FFFFFF;
   --font-body: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
   --font-display: "Noto Serif SC", "Songti SC", serif;
+  --font-serif: var(--font-display);
   --font-cid: ui-monospace, "Cascadia Code", Consolas, monospace;
   --type-display: 1.75rem; --type-heading: 1.25rem; --type-body: 1rem; --type-label: .875rem; --type-meta: .875rem;
   --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-6: 24px; --space-8: 32px; --space-12: 48px; --space-16: 64px;
@@ -19,7 +20,17 @@
   --preview-dual-min: 1100px; --preview-gap: var(--space-6); --thumbnail-ratio: 4 / 3;
   --preview-stage-min: 320px; --preview-stage-max: 800px;
   --gallery-copy-min: calc(var(--type-heading) * 1.5 + var(--space-2) + var(--type-body) * 1.75 * 3);
-  --radius-flat: 0; --radius-control: 4px; --radius-panel: 8px; --shadow-none: none;
+  --radius-flat: 0; --radius-control: 4px; --radius-panel: 8px; --radius-pill: 9999px; --shadow-none: none;
+  --segmented-track: rgba(0, 0, 0, 0.05);
+  --segmented-thumb: #FFFFFF;
+  --segmented-thumb-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
+  --badge-amber-bg: rgba(245, 158, 11, 0.12);
+  --badge-amber-text: #B45309;
+  --badge-amber-border: rgba(245, 158, 11, 0.25);
+  --status-dot-healthy: #10B981;
+  --status-dot-pending: #F59E0B;
+  --status-dot-error: #EF4444;
+  --status-dot-neutral: #9CA3AF;
   --elevation-0: none;
   --elevation-1: 0 1px 3px 0 rgba(0, 0, 0, 0.2), 0 1px 1px 0 rgba(0, 0, 0, 0.14), 0 2px 1px -1px rgba(0, 0, 0, 0.12);
   --elevation-2: 0 3px 1px -2px rgba(0, 0, 0, 0.2), 0 2px 2px 0 rgba(0, 0, 0, 0.14), 0 1px 5px 0 rgba(0, 0, 0, 0.12);

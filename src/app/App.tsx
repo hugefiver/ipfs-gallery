@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ThemeProvider } from '@mui/material/styles'
+import { ImagesSquareIcon } from '@phosphor-icons/react'
 import { galleryTheme } from '../theme/theme'
 import { useGallery } from '../hooks/useGallery'
 import { useGalleryPreferences } from '../hooks/useGalleryPreferences'
@@ -22,8 +23,8 @@ const nameCollator = new Intl.Collator('zh-CN')
 const panelTitles = { menu: '菜单', source: '影像来源', filters: '搜索与筛选', info: '影像信息', network: '网络与浏览器偏好', readerTools: '阅读工具' } as const
 const blocksShortcuts = (target: EventTarget | null) => target instanceof Element && !!target.closest('input,textarea,select,[contenteditable]:not([contenteditable="false"]),video')
 const usableFocus = (target: HTMLElement | null) => !!target?.isConnected && !target.closest('[hidden],[inert]') && target.getClientRects().length > 0
-function StatePanel({ title, busy, children }: { title: string; busy?: boolean; children?: ReactNode }) {
-  return <section className="gallery-main-state" aria-busy={busy}><h2>{title}</h2>{children}</section>
+function StatePanel({ title, busy, children, icon }: { title: string; busy?: boolean; children?: ReactNode; icon?: ReactNode }) {
+  return <section className="gallery-main-state" aria-busy={busy}>{icon && <div className="gallery-state-icon" aria-hidden="true">{icon}</div>}<h2>{title}</h2>{children}</section>
 }
 
 export default function App() {
@@ -268,7 +269,7 @@ export default function App() {
     : invalidSelection ? <StatePanel title="未找到指定影像"><p>当前条目不在筛选结果中。</p><div className="actions"><Action onClick={gallery.closeItem}>关闭提示</Action><Action onClick={() => openPanel('filters')}>搜索与筛选</Action></div></StatePanel>
     : result && !items.length ? <StatePanel title="来源中暂无可用影像"><Action onClick={() => openPanel('source')}>修改来源</Action></StatePanel>
     : result && !filtered.length ? <StatePanel title="未找到匹配的影像"><Action onClick={() => changeFilters({ q: '', tags: [], type: undefined })}>清除筛选</Action></StatePanel>
-    : !location.input ? <StatePanel title="打开一个影像来源"><p>输入 CID 或 IPFS 链接开始浏览。</p><Action onClick={() => openPanel('source')}>打开来源</Action></StatePanel> : null
+    : !location.input ? <StatePanel title="打开一个影像来源" icon={<ImagesSquareIcon size={28} weight="regular" />}><p>输入 CID 或 IPFS 链接开始浏览。</p><div className="gallery-capability-chips" aria-hidden="true"><span className="capability-chip">UnixFS 目录</span><span className="capability-chip">多 CID 列表</span><span className="capability-chip">JSON/YAML 描述文件</span><span className="capability-chip">图片 / 视频</span></div><Action onClick={() => openPanel('source')}>打开来源</Action></StatePanel> : null
 
   return <ThemeProvider theme={galleryTheme}>
     <div className="app-shell" inert={!!panel}>

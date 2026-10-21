@@ -89,7 +89,8 @@ export function NetworkSettings({ open, location, stats, preferences, effectiveG
         const stat = stats.find(value => value.url === url)
         const measured = stat && stat.successes + stat.failures > 0
         const status = !stat || !measured ? (stat?.inFlight ? '检测中' : '未检测') : stat.state === 'cooldown' ? '暂时冷却' : stat.state === 'probing' ? '恢复中' : stat.successes ? '正常可用' : '响应失败'
-        return <li key={url}><strong className="cid">{url}</strong><span>{status}</span>{stat && <span>成功 {stat.successes} · 失败 {stat.failures} · 在途 {stat.inFlight}{stat.ewmaMs === undefined ? '' : ` · 延迟 ${Math.round(stat.ewmaMs)} ms`}</span>}</li>
+        const statusType = !stat || !measured ? (stat?.inFlight ? 'pending' : 'neutral') : stat.state === 'cooldown' || stat.state === 'probing' ? 'pending' : stat.successes ? 'healthy' : 'error'
+        return <li key={url}><strong className="cid">{url}</strong><span className={`gateway-status-pill gateway-status--${statusType}`}><span className="gateway-status-dot" aria-hidden="true" />{status}</span>{stat && <span>成功 {stat.successes} · 失败 {stat.failures} · 在途 {stat.inFlight}{stat.ewmaMs === undefined ? '' : ` · 延迟 ${Math.round(stat.ewmaMs)} ms`}</span>}</li>
       })}</ul>
     </section>
     <div className="privacy-note"><p>{BUILD_POLICY.trustless ? '所有影像均在浏览器端进行内容哈希校验。' : '本构建信任当前配置的 HTTPS 网关，不比较其返回块与 CID 的内容哈希；网关可替换清单、目录或媒体内容。动态发现的 WSS／HTTPS provider 仍执行 CID 哈希校验。'}读取时由 Service Worker 优先尝试动态发现的 WSS／HTTPS provider，再回退到配置的 HTTPS 网关。</p></div>

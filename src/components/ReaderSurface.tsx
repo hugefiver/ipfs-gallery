@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type PointerEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { ArrowLeftIcon, ArrowRightIcon, ArrowsInIcon, CopyIcon, DownloadSimpleIcon, InfoIcon, MinusIcon, PlusIcon } from '@phosphor-icons/react'
+import { ArrowLeftIcon, ArrowRightIcon, ArrowsInIcon, CopyIcon, DownloadSimpleIcon, InfoIcon, LinkSimpleIcon, MinusIcon, PlusIcon } from '@phosphor-icons/react'
 import type { ReaderSurfaceProps } from '../app/readerAlbumTypes'
 import { BUILD_POLICY } from '../shared/build-policy'
 import { clampReaderPan, clampReaderZoom, ignoresReaderInteraction, ReaderGestureTracker, READER_ZOOM, type ReaderSize, type ReaderTransform } from '../hooks/readerInteraction'
@@ -251,12 +251,12 @@ function ReaderSession({ item, items, asset: binding, service, sessionId, toolsH
       }}>
       <span id={instructionId} className="reader-instructions">按 Enter 或 M 打开菜单，Tab 进入菜单按钮，左右方向键翻页。双击或多指缩放，放大后拖动查看；未放大时滑动翻页。普通轻触不执行操作。视频保留原生控制。</span>
       {asset && !failed && (asset.kind === 'image'
-        ? <img key={`${url}:${decodeAttempt}`} ref={image} className="reader-media" data-reader-media src={asset.url} alt={item.alt || item.title}
+        ? <img key={`${url}:${decodeAttempt}`} ref={image} className={`reader-media${decoded ? ' reader-media--decoded' : ''}`} data-reader-media src={asset.url} alt={item.alt || item.title}
           width={asset.width} height={asset.height} decoding="async" fetchPriority="high" draggable={false}
           style={{ transform: `translate(${transform.pan.x}px, ${transform.pan.y}px) scale(${transform.scale})` }}
           onLoad={event => { if (asset.active && event.currentTarget.isConnected) setDecodedUrl(asset.url) }}
           onError={event => { if (asset.active && event.currentTarget.isConnected) setFailedUrl(asset.url) }} />
-        : <video key={`${url}:${decodeAttempt}`} className="reader-media" data-reader-media src={asset.url} aria-label={item.alt || item.title}
+        : <video key={`${url}:${decodeAttempt}`} className={`reader-media${decoded ? ' reader-media--decoded' : ''}`} data-reader-media src={asset.url} aria-label={item.alt || item.title}
           width={asset.width} height={asset.height} controls playsInline preload="metadata"
           onLoadedMetadata={event => { if (asset.active && event.currentTarget.isConnected) setDecodedUrl(asset.url) }}
           onError={event => { if (asset.active && event.currentTarget.isConnected) setFailedUrl(asset.url) }} />)}
@@ -278,21 +278,25 @@ function ReaderSession({ item, items, asset: binding, service, sessionId, toolsH
   </div>
     {toolsAvailable && toolsHost && createPortal(<div ref={tools} className="reader-tools" data-reader-tools aria-label="阅读工具">
       <h3>{item.title}</h3>
-      <nav className="reader-tool-row" aria-label="影像顺序">
-        <button type="button" aria-label="上一项" disabled={!previous} onClick={() => previous && onSelect(previous.id)}><ArrowLeftIcon aria-hidden="true" /></button>
-        <span className="reader-position">{index < 0 ? '当前项不在筛选结果中' : `${index + 1} / ${items.length}`}</span>
-        <button type="button" aria-label="下一项" disabled={!next} onClick={() => next && onSelect(next.id)}><ArrowRightIcon aria-hidden="true" /></button>
+      <nav className="reader-tool-row reader-tool-row--nav" aria-label="影像顺序">
+        <div className="reader-tool-group">
+          <button type="button" aria-label="上一项" disabled={!previous} onClick={() => previous && onSelect(previous.id)}><ArrowLeftIcon aria-hidden="true" /></button>
+          <span className="reader-position">{index < 0 ? '当前项不在筛选结果中' : `${index + 1} / ${items.length}`}</span>
+          <button type="button" aria-label="下一项" disabled={!next} onClick={() => next && onSelect(next.id)}><ArrowRightIcon aria-hidden="true" /></button>
+        </div>
       </nav>
-      {asset?.kind === 'image' && <div className="reader-tool-row" role="group" aria-label="图片缩放">
-        <button type="button" aria-label="缩小图片" disabled={!decoded || transform.scale <= READER_ZOOM.min} onClick={() => zoom(transform.scale - READER_ZOOM.step, true)}><MinusIcon aria-hidden="true" /></button>
-        <output className="reader-position" aria-label="缩放比例">{Math.round(transform.scale * 100)}%</output>
-        <button type="button" aria-label="放大图片" disabled={!decoded || transform.scale >= READER_ZOOM.max} onClick={() => zoom(transform.scale + READER_ZOOM.step, true)}><PlusIcon aria-hidden="true" /></button>
-        <button type="button" aria-label="复位图片" disabled={!decoded || transform.scale === 1} onClick={() => zoom(1, true)}><ArrowsInIcon aria-hidden="true" /></button>
+      {asset?.kind === 'image' && <div className="reader-tool-row reader-tool-row--zoom" role="group" aria-label="图片缩放">
+        <div className="reader-tool-group">
+          <button type="button" aria-label="缩小图片" disabled={!decoded || transform.scale <= READER_ZOOM.min} onClick={() => zoom(transform.scale - READER_ZOOM.step, true)}><MinusIcon aria-hidden="true" /></button>
+          <output className="reader-position" aria-label="缩放比例">{Math.round(transform.scale * 100)}%</output>
+          <button type="button" aria-label="放大图片" disabled={!decoded || transform.scale >= READER_ZOOM.max} onClick={() => zoom(transform.scale + READER_ZOOM.step, true)}><PlusIcon aria-hidden="true" /></button>
+        </div>
+        <button type="button" aria-label="复位图片" className="reader-tool-reset" disabled={!decoded || transform.scale === 1} onClick={() => zoom(1, true)}><ArrowsInIcon aria-hidden="true" /></button>
       </div>}
       <div className="reader-tool-row" role="group" aria-label="当前媒体操作">
         <button type="button" aria-label={BUILD_POLICY.trustless ? '下载经过验证的原始媒体' : '下载原始媒体'} disabled={!asset || unavailable || downloading} onClick={() => void download(true)}><DownloadSimpleIcon aria-hidden="true" /><span>下载</span></button>
         <button type="button" aria-label="复制 CID" onClick={() => void copy(item.ref.cid, ' CID')}><CopyIcon aria-hidden="true" /><span>CID</span></button>
-        <button type="button" aria-label="复制原始地址" onClick={() => void copy(contentAddress(item.ref), '原始地址')}>地址</button>
+        <button type="button" aria-label="复制原始地址" onClick={() => void copy(contentAddress(item.ref), '原始地址')}><LinkSimpleIcon aria-hidden="true" /><span>地址</span></button>
         <button type="button" aria-label="影像详情" onClick={onOpenInfo}><InfoIcon aria-hidden="true" /><span>信息</span></button>
       </div>
       {notice && <p className="reader-notice" role="status">{notice}</p>}

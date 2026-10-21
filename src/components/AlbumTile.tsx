@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState, type RefObject } from 'react'
-import { CheckIcon, PlayIcon } from '@phosphor-icons/react'
+import { CheckIcon, ImagesSquareIcon, PlayIcon } from '@phosphor-icons/react'
 import type { MasonryBox, MediaContext } from '../app/readerAlbumTypes'
 import type { GalleryItem } from '../shared/contracts'
 import { contentAddress } from '../app/format'
@@ -101,6 +101,7 @@ function AlbumPreview({ item, service, sessionId, visible, onRatio, onVideo }: M
           aria-label={`视频预览：${item.title}`} onClick={event => event.stopPropagation()}
           onKeyDown={event => event.stopPropagation()} />
       : <span className="album-placeholder" aria-hidden={failed || undefined} aria-busy={visible && !!service && !failed}>
+          <ImagesSquareIcon className="album-placeholder-icon" aria-hidden="true" />
           <span>{failed ? '预览不可用' : visible && service ? '正在验证…' : '影像待载入'}</span>
         </span>}
     {failed && <span className="album-failure">

@@ -7,6 +7,7 @@ import {
   InfoIcon,
   MagnifyingGlassIcon,
   ShareNetworkIcon,
+  ShieldCheckIcon,
   SquaresFourIcon,
   WarningCircleIcon,
 } from '@phosphor-icons/react'
@@ -31,19 +32,22 @@ export function GalleryMenu({ mode, hasItem, hasSource, partial, warningCount, o
   onMode: (mode: GalleryMode) => void; onPanel: (panel: Exclude<GalleryPanel, null>) => void; onDownload: () => void; onShare: () => void
 }) {
   return <List component="div" disablePadding className="gallery-menu">
+    <div className="gallery-menu-group-header" aria-hidden="true">模式切换</div>
     <div role="group" aria-label="观看模式">
       {([['reader', '阅读'], ['album', '相册']] as const).map(([value, label]) => <ListItemButton disableRipple component="button" type="button" key={value} aria-pressed={mode === value} onClick={() => onMode(value)}>{value === 'reader' ? <BookOpenIcon aria-hidden="true" /> : <SquaresFourIcon aria-hidden="true" />}{label}{mode === value && ' · 当前模式'}</ListItemButton>)}
     </div>
     <Divider className="gallery-divider" />
+    <div className="gallery-menu-group-header" aria-hidden="true">档案与浏览</div>
     <ListItemButton disableRipple component="button" type="button" onClick={() => onPanel('source')}><FolderIcon aria-hidden="true" /><span>{partial ? '来源 (部分可用)' : '来源'}</span></ListItemButton>
     <ListItemButton disableRipple component="button" type="button" onClick={() => onPanel('filters')}><MagnifyingGlassIcon aria-hidden="true" /><span>搜索与筛选</span></ListItemButton>
     <ListItemButton disableRipple component="button" type="button" disabled={!hasItem} onClick={() => onPanel('info')}><InfoIcon aria-hidden="true" /><span>当前影像信息</span></ListItemButton>
     <ListItemButton disableRipple component="button" type="button" disabled={!hasItem} onClick={onDownload}><DownloadSimpleIcon aria-hidden="true" /><span>阅读工具与下载</span></ListItemButton>
     {!hasItem && <p className="help">选择影像后可查看详情与下载。</p>}
     <Divider className="gallery-divider" />
+    <div className="gallery-menu-group-header" aria-hidden="true">操作与偏好</div>
     <ListItemButton disableRipple component="button" type="button" disabled={!hasSource} onClick={onShare}><ShareNetworkIcon aria-hidden="true" /><span>复制分享链接</span></ListItemButton>
     <ListItemButton disableRipple component="button" type="button" aria-label="网络" onClick={() => onPanel('network')}><GearIcon aria-hidden="true" /><span>网络与偏好设置</span></ListItemButton>
-    {warningCount > 0 && <ListItemButton disableRipple component="button" type="button" onClick={() => onPanel('source')}><WarningCircleIcon aria-hidden="true" /><span>来源提示 · {warningCount} 项</span></ListItemButton>}
+    {warningCount > 0 && <ListItemButton disableRipple component="button" type="button" onClick={() => onPanel('source')}><WarningCircleIcon aria-hidden="true" /><span>来源提示 · {warningCount} 项</span><span className="gallery-menu-badge" aria-hidden="true">{warningCount} 项</span></ListItemButton>}
   </List>
 }
 
@@ -74,12 +78,19 @@ export function GalleryFiltersPanel(props: {
 export function GalleryInfoPanel({ item, asset, notice, onCopy }: { item: GalleryItem | undefined; asset: ReaderAssetBinding; notice: string; onCopy: (value: string, label: string) => void }) {
   if (!item) return <p>当前没有选中的影像。</p>
   const verified = asset.state.asset?.active ? asset.state.asset : undefined
+  const isTrustless = BUILD_POLICY.trustless
   return <div className="gallery-info"><h3>{item.title}</h3>{item.alt && <p className="description">{item.alt}</p>}
+    <div className={`info-integrity-card ${verified && isTrustless ? 'info-integrity-card--verified' : ''}`}>
+      <ShieldCheckIcon className="integrity-icon" aria-hidden="true" size={20} />
+      <div className="integrity-content">
+        <strong className="integrity-title">{isTrustless ? (verified ? '完整性校验已通过' : '等待哈希校验') : '网关通道'}</strong>
+        <p className="help">{verified ? (isTrustless ? '已在本地完成哈希校验，可直接下载。' : '原始媒体已准备，可下载。') : (isTrustless ? '正在等待媒体验证。' : '正在等待原始媒体。')}</p>
+      </div>
+    </div>
     <dl><dt>来源</dt><dd>{item.sourceLabel}</dd><dt>原始内容地址</dt><dd className="cid">{contentAddress(item.ref)}</dd><dt>CID</dt><dd className="cid">{item.ref.cid}</dd>
-      {!!item.tags.length && <><dt>标签</dt><dd>{item.tags.join(' / ')}</dd></>}
-      {verified && <><dt>{BUILD_POLICY.trustless ? '已验证原始媒体' : '原始媒体'}</dt><dd>{verified.mime} · {verified.byteLength.toLocaleString('zh-CN')} 字节{verified.width && verified.height ? ` · ${verified.width} × ${verified.height}` : ''}</dd></>}
+      {!!item.tags.length && <><dt>标签</dt><dd className="info-tags">{item.tags.map(tag => <span key={tag} className="info-tag-chip">{tag}</span>)}</dd></>}
+      {verified && <><dt>{isTrustless ? '已验证原始媒体' : '原始媒体'}</dt><dd>{verified.mime} · {verified.byteLength.toLocaleString('zh-CN')} 字节{verified.width && verified.height ? ` · ${verified.width} × ${verified.height}` : ''}</dd></>}
     </dl>
-    <p className="help">{verified ? (BUILD_POLICY.trustless ? '已在本地完成哈希校验，可直接下载。' : '原始媒体已准备，可下载。') : (BUILD_POLICY.trustless ? '正在等待媒体验证。' : '正在等待原始媒体。')}</p>
     <div className="actions panel-actions"><Action onClick={() => onCopy(item.ref.cid, ' CID')}>复制 CID</Action><Action onClick={() => onCopy(contentAddress(item.ref), '原始地址')}>复制原始地址</Action></div>
     {notice && <p className="panel-notice" role="status">{notice}</p>}
   </div>
