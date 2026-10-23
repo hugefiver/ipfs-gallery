@@ -453,6 +453,7 @@ export function createServiceWorkerRuntime(dependencies: ServiceRuntimeDependenc
     let removeAbort = () => {}
     let id = 0
     let admitted = false
+    const started = now()
     try {
       const url = new URL(request.url)
       const cid = request.url.slice(prefix.length)
@@ -495,6 +496,10 @@ export function createServiceWorkerRuntime(dependencies: ServiceRuntimeDependenc
       const detail = { code: raw.code, message: raw.message.slice(0, 512), retryable: raw.retryable }
       const status = detail.code === 'LIMIT' ? 429 : detail.code === 'TIMEOUT' ? 504
         : detail.code === 'CANCELLED' ? 410 : detail.code === 'INVALID_INPUT' || detail.code === 'UNSUPPORTED' ? 400 : 502
+      if (admitted && consumer) {
+        console.info('[ipfs-gallery:network]', { event: detail.code === 'CANCELLED' ? 'sw-read-cancelled' : 'sw-read-failure',
+          cid: consumer.cid, code: detail.code, status, elapsedMs: now() - started })
+      }
       const headers = responseHeaders(binding ?? { sessionId: '', bindingId: '', epoch }, id)
       headers.set('Content-Type', 'application/json')
       return new Response(JSON.stringify(detail), { status: !binding && detail.code === 'NETWORK' ? 409 : status, headers })

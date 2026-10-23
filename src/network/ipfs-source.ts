@@ -93,11 +93,22 @@ export function createIpfsBlockSourceWithOptions(config: SessionConfig, options:
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(networkError('TIMEOUT', 'Provider 发现期限已到。')), Math.min(30_000, limits.blockTimeoutMs))
     let clean = true
+    const started = Date.now()
+    const routingSignal = AbortSignal.any([signal, shutdown.signal, controller.signal])
+    console.info('[ipfs-gallery:network]', { event: 'routing-start', cid: key, background })
     try {
-      const providers = await findProviders(cid, AbortSignal.any([signal, shutdown.signal, controller.signal]),
+      const providers = await findProviders(cid, routingSignal,
         { fetch: options.fetch, endpoint: options.router, policy: options.policy })
-      state.interval = scheduler.providers(providers, key) || !providers.length ? 15_000 : Math.min(300_000, state.interval * 1.5)
+      const changed = scheduler.providers(providers, key)
+      state.interval = changed || !providers.length ? 15_000 : Math.min(300_000, state.interval * 1.5)
+      console.info('[ipfs-gallery:network]', { event: 'routing-result', cid: key, background,
+        providers: providers.length, addresses: providers.reduce((count, provider) => count + provider.addresses.length, 0),
+        changed, elapsedMs: Date.now() - started })
     } catch (error) {
+      const code = (routingSignal.aborted ? cancellationError(routingSignal.reason) : domainError(error)).error.code
+      console.info('[ipfs-gallery:network]', { event: code === 'CANCELLED' ? 'routing-cancelled' : 'routing-failure', cid: key, background,
+        code,
+        cleanupFailed: error instanceof DirectCleanupError, elapsedMs: Date.now() - started })
       state.interval = Math.max(15_000, state.interval / 2)
       if (error instanceof DirectCleanupError) { clean = false; cleanupFailure ??= error; throw error }
     } finally {
@@ -134,6 +145,9 @@ export function createIpfsBlockSourceWithOptions(config: SessionConfig, options:
     const timer = setTimeout(() => controller.abort(networkError('TIMEOUT', '健康采样期限已到。')),
       Math.min(30_000, limits.gatewayTimeoutMs))
     const operationSignal = AbortSignal.any([signal, shutdown.signal, controller.signal])
+    const details = { cid: key, kind: candidate.gateway ? 'gateway' : candidate.address!.kind,
+      address: candidate.gateway ?? candidate.address!.address.toString() }
+    console.info('[ipfs-gallery:network]', { event: 'probe-start', ...details })
     let clean = true
     let retryMs: number | undefined
     const probeFetch: typeof globalThis.fetch = async (input, init) => {
@@ -151,15 +165,24 @@ export function createIpfsBlockSourceWithOptions(config: SessionConfig, options:
       scheduler.success(candidate, Date.now() - started, penalty)
       scheduler.checked(candidate)
       if (!candidate.gateway) scheduler.confirm(candidate, key)
+      console.info('[ipfs-gallery:network]', { event: 'probe-success', ...details,
+        bytes: bytes.byteLength, elapsedMs: Date.now() - started })
     } catch (value) {
       if (value instanceof DirectCleanupError) {
+        console.info('[ipfs-gallery:network]', { event: 'probe-failure', ...details,
+          code: 'NETWORK', cleanupFailed: true, elapsedMs: Date.now() - started })
         clean = false
         cleanupFailure ??= value
         throw value
       }
-      if (value instanceof MaintenanceOversize) scheduler.checked(candidate, 60_000)
-      else {
+      if (value instanceof MaintenanceOversize) {
+        console.info('[ipfs-gallery:network]', { event: 'probe-skipped', ...details,
+          reason: 'sample-size-limit', elapsedMs: Date.now() - started })
+        scheduler.checked(candidate, 60_000)
+      } else {
         const error = operationSignal.aborted ? cancellationError(operationSignal.reason) : domainError(value)
+        console.info('[ipfs-gallery:network]', { event: error.error.code === 'CANCELLED' ? 'probe-cancelled' : 'probe-failure',
+          ...details, code: error.error.code, elapsedMs: Date.now() - started })
         scheduler.failure(candidate, error.error, Date.now() - started)
         scheduler.checked(candidate)
         if (retryMs !== undefined) {
@@ -195,6 +218,7 @@ export function createIpfsBlockSourceWithOptions(config: SessionConfig, options:
         return cached
       }
       if (active.size >= limits.maxBlockConcurrency) throw networkError('LIMIT', 'Binding 块读取容量不足。')
+      const readStarted = Date.now()
       const controller = new AbortController()
       const forward = () => controller.abort(cancellationError(signal.reason))
       signal.addEventListener('abort', forward, { once: true })
@@ -218,9 +242,13 @@ export function createIpfsBlockSourceWithOptions(config: SessionConfig, options:
       const launch = (candidate: Candidate, release: () => void) => {
         releaseWaiting?.(); releaseWaiting = undefined
         candidate.inFlight++
+        const mode = attempts.size ? 'hedge' : attempted.size ? 'retry' : 'initial'
         attempted.set(candidate.key, Date.now())
         const penalty = candidate.penalty
         const started = Date.now()
+        const details = { cid: key, kind: candidate.gateway ? 'gateway' : candidate.address!.kind,
+          address: candidate.gateway ?? candidate.address!.address.toString(), mode }
+        console.info('[ipfs-gallery:network]', { event: 'candidate-start', ...details })
         nextHedge = started + scheduler.soft(candidate)
         const attemptController = new AbortController()
         const attemptTimer = setTimeout(() => attemptController.abort(networkError('TIMEOUT', '候选读取期限已到。')), Math.min(30_000, limits.gatewayTimeoutMs))
@@ -231,10 +259,18 @@ export function createIpfsBlockSourceWithOptions(config: SessionConfig, options:
           scheduler.success(candidate, Date.now() - started, penalty)
           scheduler.confirm(candidate, key)
           winner ??= bytes
+          console.info('[ipfs-gallery:network]', { event: 'candidate-success', ...details,
+            bytes: bytes.byteLength, elapsedMs: Date.now() - started })
           controller.abort(networkError('CANCELLED', '备选请求已完成。'))
         }).catch(value => {
-          if (value instanceof DirectCleanupError) { clean = false; cleanupFailure ??= value; fatal = value; controller.abort(value); return }
+          if (value instanceof DirectCleanupError) {
+            console.info('[ipfs-gallery:network]', { event: 'candidate-failure', ...details,
+              code: 'NETWORK', cleanupFailed: true, elapsedMs: Date.now() - started })
+            clean = false; cleanupFailure ??= value; fatal = value; controller.abort(value); return
+          }
           const error = attemptSignal.aborted ? cancellationError(attemptSignal.reason) : domainError(value)
+          console.info('[ipfs-gallery:network]', { event: error.error.code === 'CANCELLED' ? 'candidate-cancelled' : 'candidate-failure',
+            ...details, code: error.error.code, ...(winner ? { reason: 'winner-selected' } : {}), elapsedMs: Date.now() - started })
           scheduler.failure(candidate, error.error, Date.now() - started)
           if (candidate.gateway && error.error.code !== 'CANCELLED') {
             const cooldown = fallback.snapshot().find(gateway => gateway.url === candidate.gateway)?.cooldownUntil
@@ -292,15 +328,24 @@ export function createIpfsBlockSourceWithOptions(config: SessionConfig, options:
         signal.removeEventListener('abort', forward)
         active.delete(controller)
       }
-      if (cleanupFailure) throw cleanupFailure
-      if ('error' in outcome) throw outcome.error
-      checkSignal(signal)
-      if (disposed) throw networkError('CANCELLED', '块读取器已释放。')
-      const origin = brokerConfiguredGatewayEvidence(fallback, key, outcome.bytes)
-      if (outcome.bytes.byteLength <= MAINTENANCE_BLOCK_BYTES) rememberMaintenanceCid(key, origin === undefined)
-      if (origin) evidence.set(outcome.bytes, origin)
-      else cache.set(key, outcome.bytes)
-      return outcome.bytes
+      try {
+        if (cleanupFailure) throw cleanupFailure
+        if ('error' in outcome) throw outcome.error
+        checkSignal(signal)
+        if (disposed) throw networkError('CANCELLED', '块读取器已释放。')
+        const origin = brokerConfiguredGatewayEvidence(fallback, key, outcome.bytes)
+        if (outcome.bytes.byteLength <= MAINTENANCE_BLOCK_BYTES) rememberMaintenanceCid(key, origin === undefined)
+        if (origin) evidence.set(outcome.bytes, origin)
+        else cache.set(key, outcome.bytes)
+        console.info('[ipfs-gallery:network]', { event: 'read-success', cid: key,
+          bytes: outcome.bytes.byteLength, elapsedMs: Date.now() - readStarted })
+        return outcome.bytes
+      } catch (error) {
+        const code = domainError(error).error.code
+        console.info('[ipfs-gallery:network]', { event: code === 'CANCELLED' ? 'read-cancelled' : 'read-failure', cid: key,
+          code, cleanupFailed: error instanceof DirectCleanupError, elapsedMs: Date.now() - readStarted })
+        throw error
+      }
   }
 
   const source: VerifiedBlockSource & { settled(): Promise<void> } = {
