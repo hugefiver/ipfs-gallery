@@ -99,7 +99,7 @@ it('holds relay reservations beyond cancel/port deadlines, then releases exactly
   const owner = new WindowOwnership()
   const relay = { count: 0, bytes: 0 }
   const { port1, port2 } = new MessageChannel()
-  const close = attachWindowBlockBridge({ type: BRIDGE_OPEN, v: VERSION, sessionId: 'session', config, policy: BUILD_POLICY }, port2,
+  const close = attachWindowBlockBridge({ type: BRIDGE_OPEN, v: VERSION, sessionId: 'session', config, roots: [], policy: BUILD_POLICY }, port2,
     () => host.env, () => {}, relay, owner)
   const rpc = new PortRpc(port1)
   cleanup.push(() => { close(); rpc.close() })
@@ -135,7 +135,7 @@ it('fences a pending open before async validation and rejects late admission wit
   const host = harness(async () => new Uint8Array(), { stallOpen: true })
   cleanup.push(() => host.validation.resolve(client))
   const credentials = { ownerId: crypto.randomUUID(), secret: crypto.randomUUID(), attempt: 1, boot: host.runtime.epoch }
-  const opening = serviceMessage(host.controller, { type: 'open', sessionId: 'session', config, ...credentials, policy: BUILD_POLICY }, () => new MessageChannel()).catch(error => error)
+  const opening = serviceMessage(host.controller, { type: 'open', sessionId: 'session', config, roots: [], ...credentials, policy: BUILD_POLICY }, () => new MessageChannel()).catch(error => error)
   await vi.waitFor(() => expect(host.messages.some(value => value.type === 'open')).toBe(true))
   const first = await serviceMessage(host.controller, { type: 'reconcile', ...credentials }, () => new MessageChannel())
   expect(first).toMatchObject({ state: 'draining' })
@@ -144,7 +144,7 @@ it('fences a pending open before async validation and rejects late admission wit
   expect(host.createSource).not.toHaveBeenCalled()
   expect(await serviceMessage(host.controller, { type: 'reconcile', ...credentials }, () => new MessageChannel()))
     .toMatchObject({ state: 'settled' })
-  await expect(serviceMessage(host.controller, { type: 'open', sessionId: 'late', config, ...credentials, policy: BUILD_POLICY }, () => new MessageChannel()))
+  await expect(serviceMessage(host.controller, { type: 'open', sessionId: 'late', config, roots: [], ...credentials, policy: BUILD_POLICY }, () => new MessageChannel()))
     .rejects.toMatchObject({ error: { code: 'CANCELLED' } })
   expect(host.createSource).not.toHaveBeenCalled()
 })
@@ -274,7 +274,7 @@ it('keeps owner fences across idle time and refuses excess owners without constr
   vi.useFakeTimers()
   await vi.advanceTimersByTimeAsync(BOUNDS.idleMs * 2)
   vi.useRealTimers()
-  await expect(serviceMessage(host.controller, { type: 'open', sessionId: 'late', config, ...credentials[0], policy: BUILD_POLICY }, () => new MessageChannel()))
+  await expect(serviceMessage(host.controller, { type: 'open', sessionId: 'late', config, roots: [], ...credentials[0], policy: BUILD_POLICY }, () => new MessageChannel()))
     .rejects.toMatchObject({ error: { code: 'CANCELLED' } })
   await expect(serviceMessage(host.controller, { type: 'reconcile', ownerId: crypto.randomUUID(), secret: crypto.randomUUID(),
     attempt: 1, boot: host.runtime.epoch }, () => new MessageChannel())).rejects.toMatchObject({ error: { code: 'LIMIT' } })

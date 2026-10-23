@@ -6,14 +6,17 @@ import { DirectCleanupError } from './direct-errors'
 import { networkError } from './errors'
 import { publicProviderAddress, type ProviderAddressPolicy, type ProviderCandidate } from './provider-policy'
 
-export const PROVIDER_LIMITS = Object.freeze({ responseBytes: 256 * 1024, recordBytes: 16 * 1024, candidates: 16, addresses: 4, addressLength: 4096 })
+export const PROVIDER_LIMITS = Object.freeze({ responseBytes: 256 * 1024, recordBytes: 16 * 1024, candidates: 16, scanned: 256, addresses: 4, addressLength: 4096 })
 export const DELEGATED_ROUTER = 'https://delegated-ipfs.dev'
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
 
 export function parseProvider(value: unknown, policy: ProviderAddressPolicy = publicProviderAddress): ProviderCandidate | undefined {
   if (!record(value) || value.Schema !== 'peer' || typeof value.ID !== 'string' || value.ID.length > 256 ||
-    !Array.isArray(value.Addrs) || !Array.isArray(value.Protocols) || value.Addrs.length > PROVIDER_LIMITS.addresses ||
-    value.Protocols.length > 16 || value.Protocols.some(protocol => typeof protocol !== 'string' || protocol.length > 63)) return undefined
+    !Array.isArray(value.Addrs)) return undefined
+  const protocols = value.Protocols
+  if (protocols !== undefined && (!Array.isArray(protocols) || protocols.length > 16 ||
+    protocols.some(protocol => typeof protocol !== 'string' || protocol.length > 63))) return undefined
+  const unknownProtocols = protocols === undefined || protocols.length === 0
   if (new TextEncoder().encode(JSON.stringify(value)).byteLength > PROVIDER_LIMITS.recordBytes) return undefined
   try {
     const id = peerIdFromString(value.ID)
@@ -22,11 +25,12 @@ export function parseProvider(value: unknown, policy: ProviderAddressPolicy = pu
       if (typeof input !== 'string' || input.length > PROVIDER_LIMITS.addressLength) continue
       let safe
       try { safe = policy(multiaddr(input), id) } catch { continue }
-      if (!safe || (safe.kind === 'wss' && !value.Protocols.includes('transport-bitswap')) ||
-        (safe.kind === 'https' && !value.Protocols.includes('transport-ipfs-gateway-http'))) continue
+      if (!safe || (!unknownProtocols && ((safe.kind === 'wss' && !protocols.includes('transport-bitswap')) ||
+        (safe.kind === 'https' && !protocols.includes('transport-ipfs-gateway-http'))))) continue
       if (!addresses.some(address => address.address.equals(safe.address))) addresses.push(safe)
+      if (addresses.length === PROVIDER_LIMITS.addresses) break
     }
-    return addresses.length ? { id, addresses } : undefined
+    return addresses.length ? { id, addresses, ...(unknownProtocols ? { unknownProtocols: true } : {}) } : undefined
   } catch { return undefined }
 }
 
@@ -39,8 +43,18 @@ export async function findProviders(cid: CID, signal: AbortSignal, options: Prov
   const acceptRecord = (value: unknown) => {
     count++
     const provider = parseProvider(value, options.policy)
-    if (provider) result.push(provider)
-    return count < PROVIDER_LIMITS.candidates
+    if (provider) {
+      const existing = result.find(candidate => candidate.id.equals(provider.id))
+      if (!existing) result.push(provider)
+      else {
+        for (const address of provider.addresses) {
+          if (existing.addresses.length === PROVIDER_LIMITS.addresses) break
+          if (!existing.addresses.some(value => value.address.equals(address.address))) existing.addresses.push(address)
+        }
+        if (provider.unknownProtocols) existing.unknownProtocols = true
+      }
+    }
+    return count < PROVIDER_LIMITS.scanned && result.length < PROVIDER_LIMITS.candidates
   }
   let pending = ''
   let json = false
@@ -70,8 +84,8 @@ export async function findProviders(cid: CID, signal: AbortSignal, options: Prov
     if (pending.trim()) {
       const value: unknown = JSON.parse(pending)
       if (json && record(value) && Array.isArray(value.Providers)) {
-        for (const provider of value.Providers.slice(0, PROVIDER_LIMITS.candidates)) if (!acceptRecord(provider)) break
-      } else if (!json && count < PROVIDER_LIMITS.candidates) parseLine(pending)
+        for (const provider of value.Providers) if (!acceptRecord(provider)) break
+      } else if (!json && count < PROVIDER_LIMITS.scanned && result.length < PROVIDER_LIMITS.candidates) parseLine(pending)
       else throw networkError('NETWORK', 'Provider 响应结构无效。')
     }
     return result

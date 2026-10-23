@@ -18,6 +18,8 @@ export interface DirectTransport {
   retrieve(cid: CID, provider: ProviderCandidate, address: Multiaddr, signal: AbortSignal): Promise<Uint8Array>
   dispose(): void
   settled?(): Promise<void>
+  drained?(): Promise<void>
+  maintain?(): Promise<void>
 }
 
 export { DirectCleanupError } from './direct-errors'
@@ -47,6 +49,8 @@ export function createDirectTransport(policy: ProviderAddressPolicy = publicProv
   let startup: ReturnType<typeof start> | undefined
   let stopping: Promise<void> | undefined
   let cleanupFailure: DirectCleanupError | undefined
+  let idleLease: (() => void) | undefined
+  let lastUsed = Date.now()
 
   const transport = createBudgetedWebSockets(
     async address => !await gater.denyDialMultiaddr!(address),
@@ -97,7 +101,7 @@ export function createDirectTransport(policy: ProviderAddressPolicy = publicProv
       connectionManager: {
         maxConnections: 6, maxParallelDials: 2, maxDialQueueLength: 2, maxPeerAddrsToDial: 1,
         resolvers: {}, reconnectRetries: 0, maxIncomingPendingConnections: 0,
-        dialTimeout: 5000, addressDialTimeout: 5000,
+        dialTimeout: 30_000, addressDialTimeout: 30_000,
       },
     }), {
       maxIncomingMessageSize: BITSWAP_LIMITS.messageBytes, maxOutgoingMessageSize: BITSWAP_LIMITS.messageBytes,
@@ -119,14 +123,19 @@ export function createDirectTransport(policy: ProviderAddressPolicy = publicProv
     }
   }
 
-  async function stopIdle(): Promise<void> {
+  async function stopIdle(force = false): Promise<void> {
     if (users !== 0 || !startup) return
+    if (!force && !disposed && !cleanupFailure && allowed.size === 1 && connecting.size === 1) {
+      idleLease ??= directBudget.retainIdle()
+      if (idleLease) return
+    }
     const current = startup
     stopping ??= (async () => {
       const runtime = await current.catch(() => undefined)
       if (runtime) await stopNode(runtime.node)
       else await waitForSockets()
       if (cleanupFailure) throw cleanupFailure
+      idleLease?.(); idleLease = undefined
       store.clear()
       allowed.clear()
       admissionErrors.clear()
@@ -148,6 +157,10 @@ export function createDirectTransport(policy: ProviderAddressPolicy = publicProv
       checkSignal(signal)
       checkSignal(shutdown.signal)
       const id = provider.id.toString()
+      if (!users && allowed.size && !allowed.has(id)) await stopIdle(true)
+      checkSignal(signal)
+      if (!allowed.has(id) && allowed.size >= 6) throw networkError('LIMIT', 'Binding Peer 容量不足。')
+      idleLease?.(); idleLease = undefined
       if (!peerLeases.has(id)) peerLeases.set(id, directBudget.acquire('peer'))
       const addresses = allowed.get(id) ?? new Set<string>()
       if (!addresses.has(safe.address.toString()) && addresses.size >= 4) throw networkError('NETWORK', 'Peer 地址候选已满。')
@@ -163,7 +176,7 @@ export function createDirectTransport(policy: ProviderAddressPolicy = publicProv
         if (!setup) {
           const controller = new AbortController()
           const setupSignal = AbortSignal.any([controller.signal, shutdown.signal])
-          const timer = setTimeout(() => controller.abort(networkError('TIMEOUT', 'Provider 拨号期限已到。')), 5000)
+          const timer = setTimeout(() => controller.abort(networkError('TIMEOUT', 'Provider 拨号期限已到。')), 30_000)
           const current = {
             controller, consumers: new Set<symbol>(),
             ready: (async () => {
@@ -219,6 +232,7 @@ export function createDirectTransport(policy: ProviderAddressPolicy = publicProv
         throw admissionErrors.get(id) ?? error
       } finally {
         users--
+        lastUsed = Date.now()
         await stopIdle()
       }
   }
@@ -239,11 +253,20 @@ export function createDirectTransport(policy: ProviderAddressPolicy = publicProv
       const failure = outcomes.find(result => result.status === 'rejected')
       if (failure?.status === 'rejected') throw failure.reason
     },
+    async maintain() {
+      if (!users && (Date.now() - lastUsed >= 90_000 || !connecting.size)) await stopIdle(true)
+    },
+    async drained() {
+      await Promise.all([...pending])
+      await stopIdle(true)
+      if (stopping) await stopping
+      await waitForSockets()
+    },
     dispose() {
       if (disposed) return
       disposed = true
       shutdown.abort(networkError('CANCELLED', '传输已释放。'))
-      // Active retrieval finally blocks own shutdown settlement and its budget.
+      void stopIdle(true).catch(error => { cleanupFailure ??= error instanceof DirectCleanupError ? error : new DirectCleanupError() })
     },
   }
 }

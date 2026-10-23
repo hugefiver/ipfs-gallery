@@ -219,7 +219,7 @@ describe('shared-flight cancellation and caps', () => {
 describe('adaptive scheduling and recovery', () => {
   it('explores an unmeasured gateway, favors its faster EWMA, and splits under load', async () => {
     vi.useFakeTimers()
-    const blocks = await Promise.all(Array.from({ length: 13 }, (_, index) => rawBlock(`adaptive-${index}`)))
+    const blocks = await Promise.all(Array.from({ length: 15 }, (_, index) => rawBlock(`adaptive-${index}`)))
     const hosts: string[] = []
     const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
       const host = new URL(input.toString()).hostname
@@ -233,12 +233,18 @@ describe('adaptive scheduling and recovery', () => {
       await vi.advanceTimersByTimeAsync(10)
       await request
     }
-    expect(hosts.slice(0, 9)).toEqual(Array<string>(9).fill('a.gateway.net'))
-    expect(hosts[9]).toBe('b.gateway.net')
-    const burst = Promise.all(blocks.slice(10).map((block) => source.get(block.cid, signal())))
+    expect(hosts.slice(0, 10)).toEqual(Array<string>(10).fill('a.gateway.net'))
+    await vi.advanceTimersByTimeAsync(600_000)
+    for (const block of blocks.slice(10, 12)) {
+      const request = source.get(block.cid, signal())
+      await vi.advanceTimersByTimeAsync(10)
+      await request
+    }
+    expect(hosts[11]).toBe('b.gateway.net')
+    const burst = Promise.all(blocks.slice(12).map((block) => source.get(block.cid, signal())))
     await vi.advanceTimersByTimeAsync(10)
     await burst
-    expect(hosts.slice(10)).toEqual(['b.gateway.net', 'a.gateway.net', 'b.gateway.net'])
+    expect(new Set(hosts.slice(12))).toEqual(new Set(['a.gateway.net', 'b.gateway.net']))
     expect(source.snapshot().map((gateway) => gateway.ewmaMs)).toEqual([8, 5])
   })
 
@@ -277,10 +283,11 @@ describe('adaptive scheduling and recovery', () => {
     vi.useFakeTimers()
     const blocks = await Promise.all(['corrupt', 'waiting'].map(rawBlock))
     const fetch = vi.fn<typeof globalThis.fetch>(async () => response(Uint8Array.of(0)))
-    const source = broker(fetch)
+    const settings = config(undefined, { blockTimeoutMs: 1_000 })
+    const source = broker(fetch, settings)
     await expect(source.get(blocks[0]!.cid, signal())).rejects.toMatchObject({ error: { code: 'INTEGRITY' } })
     const waiting = expect(source.get(blocks[1]!.cid, signal())).rejects.toMatchObject({ error: { code: 'TIMEOUT' } })
-    await vi.advanceTimersByTimeAsync(30_000)
+    await vi.advanceTimersByTimeAsync(settings.limits.blockTimeoutMs)
     await waiting
     expect(fetch).toHaveBeenCalledTimes(2)
     expect(source.snapshot().every((gateway) => gateway.failures === 1 && gateway.inFlight === 0)).toBe(true)

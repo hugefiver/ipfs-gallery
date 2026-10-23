@@ -7,6 +7,10 @@ export interface VerifiedBlockSource {
   dispose(): void
   /** Snapshot barrier for work already registered; only successful cleanup completes it. */
   settled?(): Promise<void>
+  /** Final ownership barrier, including startup, maintenance and retained sockets. */
+  drained?(): Promise<void>
+  /** One bounded discovery pass; roots are fixed by the validated session open. */
+  maintain?(roots: readonly string[], signal: AbortSignal): Promise<void>
 }
 
 export interface BrokerDependencies {

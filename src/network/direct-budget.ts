@@ -7,6 +7,14 @@ export class DirectBudget {
   private peers = 0
   private metadataEntries = 0
   private metadataBytes = 0
+  private idle = 0
+
+  retainIdle(): (() => void) | undefined {
+    if (this.idle >= 3) return
+    this.idle++
+    let released = false
+    return () => { if (!released) { released = true; this.idle-- } }
+  }
 
   acquire(kind: 'dial' | 'connection' | 'peer'): () => void {
     const key = kind === 'dial' ? 'dials' : kind === 'connection' ? 'connections' : 'peers'

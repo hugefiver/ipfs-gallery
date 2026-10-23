@@ -154,6 +154,20 @@ describe('Worker client', () => {
     await Promise.all(work)
   })
 
+  it.each(['NETWORK', 'TIMEOUT', 'NOT_FOUND'] as const)('keeps the active source after a recoverable discovery %s terminal', async code => {
+    const worker = new FakeWorker()
+    const client = createGalleryClient(() => worker.asWorker())
+    const request = discover('failed-discovery')
+    const discovery = client.discover(request)
+    worker.response({ type: 'error', sessionId: request.sessionId, requestId: request.requestId,
+      error: { code, message: 'recoverable discovery failure', retryable: true } })
+    await expect(discovery).rejects.toMatchObject({ error: { code } })
+    const loading = client.loadAsset(load('after-failure'))
+    expect(worker.sent.some(sent => sent.requestId === 'after-failure')).toBe(true)
+    worker.respond(load('after-failure'), asset())
+    await expect(loading).resolves.toMatchObject({ byteLength: 4 })
+  })
+
   it('rejects duplicate identities without changing the active session', async () => {
     const worker = new FakeWorker()
     const client = createGalleryClient(() => worker.asWorker())

@@ -9,6 +9,7 @@ import { abortable, cancellationError, checkSignal, networkError } from './error
 import { normalizeGateway } from './gateways'
 import type { BrokerDependencies, VerifiedBlockSource } from './types'
 import { parseBlockCid, verifyBlock } from './verify'
+import { SourceScheduler } from './source-scheduler'
 
 export { normalizeGateway } from './gateways'
 
@@ -91,7 +92,11 @@ async function readBlock(response: Response, maxBytes: number, signal: AbortSign
   }
 }
 
-export function createGatewayBroker(config: SessionConfig, dependencies: BrokerDependencies): VerifiedBlockSource {
+export interface GatewayBroker extends VerifiedBlockSource {
+  getFrom(gateway: string, cid: string, signal: AbortSignal): Promise<Uint8Array>
+}
+
+export function createGatewayBroker(config: SessionConfig, dependencies: BrokerDependencies): GatewayBroker {
   const evidence = new WeakMap<Uint8Array, ConfiguredGatewayEvidence>()
   const fetchBlock = dependencies.fetch
   const limits = { ...config.limits }
@@ -108,7 +113,7 @@ export function createGatewayBroker(config: SessionConfig, dependencies: BrokerD
   const flights = new Map<string, Flight>()
   const waiters = new Set<() => void>()
   let active = 0
-  let schedules = 0
+  const scheduler = new SourceScheduler(urls, dependencies.now)
   let disposed = false
   let cleanupFailure: DirectCleanupError | undefined
 
@@ -144,14 +149,9 @@ export function createGatewayBroker(config: SessionConfig, dependencies: BrokerD
         return gateway.inFlight < limits.maxGatewayConcurrency
       })
       if (active < limits.maxBlockConcurrency && eligible.length) {
-        schedules++
-        const unexplored = schedules % 10 === 0
-          ? eligible.find((gateway) => gateway.state === 'cooldown' || gateway.ewmaMs === undefined)
-          : undefined
-        const chosen = unexplored ?? eligible.reduce((best, candidate) =>
-          (candidate.ewmaMs ?? 800) * (1 + candidate.inFlight) < (best.ewmaMs ?? 800) * (1 + best.inFlight)
-            ? candidate : best,
-        )
+        const excluded = new Set(gateways.filter(gateway => !eligible.includes(gateway)).map(gateway => `gateway:${gateway.url}`))
+        const candidate = scheduler.choose(excluded, limits.maxGatewayConcurrency)
+        const chosen = eligible.find(gateway => gateway.url === candidate?.gateway) ?? eligible[0]!
         if (chosen.state === 'cooldown') chosen.state = 'probing'
         active++
         chosen.inFlight++
@@ -187,6 +187,9 @@ export function createGatewayBroker(config: SessionConfig, dependencies: BrokerD
   async function attempt(cid: CID, gateway: Gateway, signal: AbortSignal): Promise<BlockResult> {
     const started = dependencies.now()
     const penaltyVersion = gateway.penaltyVersion
+    const candidate = scheduler.candidates.get(`gateway:${gateway.url}`)!
+    const samplePenalty = candidate.penalty
+    candidate.inFlight++
     const controller = new AbortController()
     const forwardAbort = () => controller.abort(signal.reason)
     signal.addEventListener('abort', forwardAbort, { once: true })
@@ -229,6 +232,7 @@ export function createGatewayBroker(config: SessionConfig, dependencies: BrokerD
       }
       checkSignal(controller.signal)
       const elapsed = Math.max(1, dependencies.now() - started)
+      scheduler.success(candidate, elapsed, samplePenalty)
       gateway.ewmaMs = gateway.ewmaMs === undefined ? elapsed : gateway.ewmaMs * 0.75 + elapsed * 0.25
       gateway.successes++
       if (gateway.penaltyVersion === penaltyVersion) {
@@ -247,11 +251,13 @@ export function createGatewayBroker(config: SessionConfig, dependencies: BrokerD
       const error = controller.signal.aborted
         ? cancellationError(controller.signal.reason, gateway.url)
         : value instanceof GalleryDomainError ? new GalleryDomainError({ ...value.error, gateway: gateway.url }) : networkError('NETWORK', '网关读取失败。', gateway.url)
+      scheduler.failure(candidate, error.error, dependencies.now() - started)
       penalize(gateway, error, retryMs)
       throw error
     } finally {
       clearTimeout(timer)
       signal.removeEventListener('abort', forwardAbort)
+      candidate.inFlight--
       gateway.inFlight--
       active--
       notify()
@@ -297,7 +303,21 @@ export function createGatewayBroker(config: SessionConfig, dependencies: BrokerD
     return flight
   }
 
-  const source: VerifiedBlockSource = {
+  const source: GatewayBroker = {
+    async getFrom(url, value, signal) {
+      checkSignal(signal)
+      if (cleanupFailure) throw cleanupFailure
+      if (disposed) throw networkError('CANCELLED', '块读取器已释放。')
+      const gateway = gateways.find(candidate => candidate.url === url)
+      if (!gateway) throw networkError('INVALID_INPUT', '网关不属于当前配置。')
+      if (active >= limits.maxBlockConcurrency || gateway.inFlight >= limits.maxGatewayConcurrency) throw networkError('LIMIT', '网关容量不足。')
+      const cid = parseBlockCid(value, limits.maxBlockBytes)
+      active++; gateway.inFlight++
+      const result = await attempt(cid, gateway, signal)
+      if (result.gateway !== undefined) evidence.set(result.bytes, Object.freeze({ canonicalCid: cid.toV1().toString(),
+        gateway: result.gateway, byteLength: result.bytes.byteLength }))
+      return result.bytes
+    },
     async get(value, signal) {
       checkSignal(signal)
       if (cleanupFailure) throw cleanupFailure

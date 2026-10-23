@@ -24,7 +24,7 @@ export function deferred<T>() {
   return { promise, resolve, reject }
 }
 export async function binding(runtime: ReturnType<typeof createServiceWorkerRuntime>,
-  owner = client, settings = config) {
+  owner = client, settings = config, roots: string[] = []) {
   const { port1, port2 } = new MessageChannel()
   const response = new Promise<Record<string, unknown>>(resolve => { port1.onmessage = event => resolve(event.data); port1.start() })
   let identities = ownerIds.get(runtime)
@@ -32,11 +32,12 @@ export async function binding(runtime: ReturnType<typeof createServiceWorkerRunt
   let ownership = identities.get(owner.id)
   if (!ownership) { ownership = { ownerId: crypto.randomUUID(), secret: crypto.randomUUID(), attempt: 0 }; identities.set(owner.id, ownership) }
   ownership.attempt++
-  await runtime.open({ v: VERSION, type: 'open', sessionId: 'session', config: settings,
+  await runtime.open({ v: VERSION, type: 'open', sessionId: 'session', config: settings, roots,
      ...ownership, boot: runtime.epoch, policy: BUILD_POLICY }, owner, port2)
   const envelope = await response
   if (!envelope.ok) { port1.close(); throw envelope.error }
-  const identity = envelope.value as { sessionId: string; bindingId: string; epoch: string; capability: string }
+  const value = envelope.value as { sessionId: string; bindingId: string; epoch: string; capability: string }
+  const identity = { sessionId: value.sessionId, bindingId: value.bindingId, epoch: value.epoch, capability: value.capability }
   const rpc = new PortRpc(port1)
   const control = (type: string, fields = {}) => rpc.request({ type, sessionId: identity.sessionId,
     bindingId: identity.bindingId, epoch: identity.epoch, ...fields })

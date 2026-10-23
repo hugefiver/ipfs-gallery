@@ -34,6 +34,8 @@ interface Flight {
   cleanup: Promise<void>; outcome?: Outcome
   waiters: Map<Consumer, { resolve(bytes: Uint8Array): void; reject(error: unknown): void }>
 }
+const MAINTENANCE_WORKING_BYTES = 1024 * 1024
+
 interface Binding extends BindingIdentity {
   clientId: string; config: SessionConfig; capability: string; source: VerifiedBlockSource
   port: MessagePort; sequence: number; lastBlock: number; consumers: Map<number, Consumer>
@@ -42,6 +44,8 @@ interface Binding extends BindingIdentity {
   drainPromise?: Promise<void>
   attempt: Attempt
   cleanupError?: unknown
+  roots: string[]; contentSeen: boolean; leaseUntil: number; maintainSequence: number
+  maintenance?: Promise<void>; maintenanceController?: AbortController
 }
 interface Attempt { number: number; binding?: Binding; done: Promise<void>; finish(): void }
 interface Owner {
@@ -105,7 +109,7 @@ export function createServiceWorkerRuntime(dependencies: ServiceRuntimeDependenc
   function armIdle(binding: Binding): void {
     clearTimeout(binding.idle)
     if (!binding.closed) binding.idle = setTimeout(() => {
-      if (!binding.consumers.size && !binding.flights.size && !binding.controls) idle(binding)
+      if (!binding.consumers.size && !binding.flights.size && !binding.controls && binding.leaseUntil <= now()) idle(binding)
       else armIdle(binding)
     }, BOUNDS.idleMs)
   }
@@ -154,10 +158,13 @@ export function createServiceWorkerRuntime(dependencies: ServiceRuntimeDependenc
     clearTimeout(binding.idle)
     binding.drainPromise = (async () => {
       const consumers = [...binding.consumers.values()].map(consumer => cancel(binding, consumer))
+      binding.leaseUntil = 0
+      binding.maintenanceController?.abort(domain('CANCELLED'))
       binding.source.dispose()
+      await binding.maintenance
       await Promise.all(consumers)
       await Promise.all([...binding.flights.values()].map(flight => flight.cleanup))
-      await binding.source.settled?.()
+      await (binding.source.drained?.() ?? binding.source.settled?.())
       bindings.delete(binding.bindingId)
       binding.attempt.finish()
     })()
@@ -168,7 +175,7 @@ export function createServiceWorkerRuntime(dependencies: ServiceRuntimeDependenc
     for (const consumer of binding.consumers.values()) {
       if (consumer.expires <= now()) void cancel(binding, consumer).catch(() => {})
     }
-    if (!binding.consumers.size && !binding.flights.size && binding.touched + BOUNDS.idleMs <= now()) idle(binding)
+    if (!binding.consumers.size && !binding.flights.size && binding.leaseUntil <= now() && binding.touched + BOUNDS.idleMs <= now()) idle(binding)
   }
   function armConsumer(binding: Binding, consumer: Consumer, duration: number): void {
     clearTimeout(consumer.timer)
@@ -199,6 +206,7 @@ export function createServiceWorkerRuntime(dependencies: ServiceRuntimeDependenc
       try {
         await live(binding)
         if (consumer.cancelled || consumer.released || binding.closed) throw domain('CANCELLED')
+        binding.contentSeen = true
         return { ticket: consumer.ticket }
       } catch (error) { await cancel(binding, consumer); throw error }
     }
@@ -257,7 +265,8 @@ export function createServiceWorkerRuntime(dependencies: ServiceRuntimeDependenc
       const binding: Binding = { sessionId: request.sessionId, bindingId: token(), epoch,
         clientId: client.id, config, capability: token(), source: dependencies.createSource(config), port,
         sequence: 0, lastBlock: 0, consumers: new Map(), flights: new Map(), closed: false, touched: now(), controls: 0,
-        attempt: pending }
+        attempt: pending, roots: request.roots, contentSeen: false,
+        leaseUntil: request.roots.length ? now() + BOUNDS.leaseMs : 0, maintainSequence: 0 }
       pending.binding = binding
       bindings.set(binding.bindingId, binding)
       if (owner.retired || owners.get(request.ownerId) !== owner || request.attempt <= owner.fence) { await close(binding); throw domain('CANCELLED') }
@@ -312,6 +321,36 @@ export function createServiceWorkerRuntime(dependencies: ServiceRuntimeDependenc
       if (!inScope(source ?? undefined) || !record(value) || value.v !== VERSION) throw domain('INVALID_INPUT')
       if (management >= BOUNDS.management) throw domain('LIMIT')
       management++; admitted = true
+      if (value.type === 'maintain') {
+        exact(value, ['v', 'type', 'sessionId', 'bindingId', 'epoch', 'capability', 'sequence'])
+        const binding = bindings.get(value.bindingId as string)
+        const actual = await dependencies.clients.get(source!.id)
+        if (!inScope(actual) || actual.id !== source!.id || actual.url !== source!.url || !binding ||
+          binding.clientId !== actual.id || binding.closed || value.sessionId !== binding.sessionId ||
+          value.epoch !== binding.epoch || value.capability !== binding.capability ||
+          !Number.isSafeInteger(value.sequence) || (value.sequence as number) <= binding.maintainSequence) throw domain('INVALID_INPUT')
+        binding.maintainSequence = value.sequence as number
+        if (!binding.roots.length && !binding.contentSeen) throw domain('INVALID_INPUT')
+        binding.leaseUntil = now() + BOUNDS.leaseMs
+        armIdle(binding)
+        if (!binding.maintenance && !binding.flights.size
+          && workingBytes + MAINTENANCE_WORKING_BYTES <= BOUNDS.workingBytes) {
+          const controller = new AbortController()
+          binding.maintenanceController = controller
+          workingBytes += MAINTENANCE_WORKING_BYTES
+          const timer = setTimeout(() => controller.abort(domain('TIMEOUT')), BOUNDS.maintainMs)
+          const task = Promise.resolve().then(() => binding.source.maintain?.(binding.roots, controller.signal)).finally(() => clearTimeout(timer))
+          binding.maintenance = task
+          void task.then(() => {
+            workingBytes -= MAINTENANCE_WORKING_BYTES
+            if (binding.maintenance === task) binding.maintenance = undefined
+            if (binding.maintenanceController === controller) binding.maintenanceController = undefined
+          }, error => { binding.cleanupError = error ?? domain('NETWORK') })
+        }
+        await binding.maintenance
+        reply(port, 0, { sessionId: binding.sessionId, bindingId: binding.bindingId, epoch, sequence: value.sequence })
+        return
+      }
       let owner: Owner | undefined
       let attempt = 0
       if (value.type === 'reconcile') {
@@ -353,7 +392,9 @@ export function createServiceWorkerRuntime(dependencies: ServiceRuntimeDependenc
       existing.consumers.add(consumer)
       return existing
     }
-    const bytes = binding.config.limits.maxBlockBytes * 3
+    // Two attempts (each owned result + reader growth), one admission snapshot, and bounded routing buffers.
+    // The network attempt budget is a sublimit on these same allocations, not an additional allowance.
+    const bytes = binding.config.limits.maxBlockBytes * 5 + 512 * 1024
     if (flightCount >= BOUNDS.flights || binding.flights.size >= binding.config.limits.maxBlockConcurrency
       || workingBytes + bytes > BOUNDS.workingBytes) throw domain('LIMIT')
     const controller = new AbortController()
@@ -473,6 +514,6 @@ export function createServiceWorkerRuntime(dependencies: ServiceRuntimeDependenc
     usage() { return { bindings: bindings.size, flights: flightCount, consumers: consumerCount, responseBytes, workingBytes,
       owners: owners.size, handlers, waiters: [...bindings.values()].reduce((total, binding) => total
         + [...binding.flights.values()].reduce((sum, flight) => sum + flight.waiters.size, 0), 0) } },
-    acceptsOpen(value: unknown): boolean { return record(value) && ['open', 'identify', 'reconcile'].includes(value.type as string) },
+    acceptsOpen(value: unknown): boolean { return record(value) && ['open', 'identify', 'reconcile', 'maintain'].includes(value.type as string) },
   }
 }

@@ -26,10 +26,10 @@ describe('resource defaults', () => {
       maxAssemblyBytes: 64 * MiB,
       maxDiscoveryInputBytes: 128 * MiB,
       maxAssetInputBytes: 96 * MiB,
-      gatewayTimeoutMs: 10_000,
-      blockTimeoutMs: 30_000,
-      discoveryTimeoutMs: 60_000,
-      assetTimeoutMs: 90_000,
+      gatewayTimeoutMs: 30_000,
+      blockTimeoutMs: 120_000,
+      discoveryTimeoutMs: 300_000,
+      assetTimeoutMs: 300_000,
       progressIntervalMs: 100,
       telemetryIntervalMs: 500,
     })
@@ -41,7 +41,13 @@ describe('resource defaults', () => {
   })
 
   it('uses distinct public HTTPS candidate bases without credentials or URL state', () => {
-    expect(DEFAULT_GATEWAYS.length).toBeGreaterThanOrEqual(3)
+    expect(DEFAULT_GATEWAYS).toEqual([
+      'https://ipfs.filebase.io',
+      'https://ipfs.orbitor.dev',
+      'https://apac.orbitor.dev',
+      'https://dget.top',
+      'https://ipfs.4everland.io',
+    ])
     expect(DEFAULT_GATEWAYS.length).toBeLessThanOrEqual(DEFAULT_LIMITS.maxGateways)
     expect(new Set(DEFAULT_GATEWAYS).size).toBe(DEFAULT_GATEWAYS.length)
     for (const candidate of DEFAULT_GATEWAYS) {

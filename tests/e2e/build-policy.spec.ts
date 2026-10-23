@@ -9,10 +9,25 @@ import { SW_GALLERY_BLOCK_PATH } from '../support/sw-gallery-policy'
 import { SW_GALLERY_HTTP_PROVIDER } from '../support/sw-gallery-network'
 import { exerciseSwPrivateSession } from './sw-private-session'
 import { createPng } from '../fixtures/media'
+import { DEFAULT_LIMITS } from '../../src/shared/limits'
 
 test.use({ allowDefaultGateways: true })
 const preferenceKey = 'ipfs-gallery.preferences.v1'
 const downloadName = (trustless: boolean) => trustless ? '下载经过验证的原始媒体' : '下载原始媒体'
+
+function recordWorkerTerminalErrors(): void {
+  const errors: string[] = []
+  Reflect.set(window, 'swGalleryTerminalErrors', errors)
+  const NativeWorker = Worker
+  window.Worker = class extends NativeWorker {
+    constructor(url: string | URL, options?: WorkerOptions) {
+      super(url, options)
+      this.addEventListener('message', event => {
+        if (event.data?.type === 'error' && typeof event.data.error?.code === 'string') errors.push(event.data.error.code)
+      })
+    }
+  }
+}
 
 test('source-free entry and a real identity media CID remain local in either build', async ({ page, network, expectedPolicy }) => {
   await page.goto('/')
@@ -79,17 +94,23 @@ for (const prefix of ['/', '/gallery/'] as const) {
   test.describe(`configured wrong-hash gateway at ${prefix}`, () => {
     test.use({ appPrefix: prefix, alternateGatewayMedia: true })
     test('only explicit non-strict compilation admits a different valid PNG through the private byte chain', async ({ page, galleryFixtures: fixtures, network, expectedPolicy }) => {
+      if (expectedPolicy.trustless) {
+        test.setTimeout(DEFAULT_LIMITS.blockTimeoutMs + 30_000)
+        await page.addInitScript(recordWorkerTerminalErrors)
+      }
       const blocks = new Map(fixtures.blocks)
       blocks.set(fixtures.raw.cid, { cid: CID.parse(fixtures.raw.cid), bytes: network.alternate })
       const evidence = await observeSwGalleryBlocks(page, blocks, expectedPolicy)
       const query = new URL(sourceUrl('unixfs', fixtures.raw.ref, {}, []), network.baseURL).search
       const rejected = expectedPolicy.trustless ? page.waitForResponse(response =>
-        new URL(response.url()).pathname.endsWith(`${SW_GALLERY_BLOCK_PATH}${fixtures.raw.cid}`) && !response.ok()) : undefined
+        new URL(response.url()).pathname.endsWith(`${SW_GALLERY_BLOCK_PATH}${fixtures.raw.cid}`) && !response.ok(),
+      { timeout: DEFAULT_LIMITS.blockTimeoutMs + 15_000 }) : undefined
       await page.goto(`${network.baseURL}${query}&trustless=${!expectedPolicy.trustless}`)
       if (expectedPolicy.trustless) {
         const response = await rejected!
         expect(response.fromServiceWorker()).toBe(true)
-        expect((await response.json()).code).toBe('INTEGRITY')
+        expect(response.status()).toBe(502)
+        await expect.poll(() => page.evaluate(() => Reflect.get(window, 'swGalleryTerminalErrors'))).toContain('INTEGRITY')
         await expect(page.getByRole('alert')).toBeVisible()
         expect(await ui.reader(page).getByRole('img').count()).toBe(0)
         await evidence.finish()
@@ -111,12 +132,19 @@ for (const transport of ['http', 'bitswap'] as const) {
   test.describe(`${transport} provider remains strict`, () => {
     test.use({ directTransport: transport })
     test('wrong-hash provider bytes are rejected before real configured-gateway fallback', async ({ page, galleryFixtures: fixtures, network, expectedPolicy }) => {
-      if (transport === 'http') network.httpProvider.setBlockMode(fixtures.raw.cid, { kind: 'response', status: 200, body: network.alternate,
-        headers: { 'content-type': 'application/vnd.ipld.raw' } })
-      else network.provider!.setBlockMode(fixtures.raw.cid, { kind: 'corrupt' })
+      if (transport === 'http') {
+        network.fast.setMode({ kind: '429', retryAfter: '1' })
+        network.httpProvider.setBlockMode(fixtures.raw.cid, { kind: 'response', status: 200, body: network.alternate,
+          headers: { 'content-type': 'application/vnd.ipld.raw' } })
+      } else network.provider!.setBlockMode(fixtures.raw.cid, { kind: 'corrupt' })
       const evidence = await observeSwGalleryBlocks(page, fixtures.blocks, expectedPolicy)
       const gateways = transport === 'bitswap' ? [SW_GALLERY_HTTP_PROVIDER, FIXTURE_GATEWAYS.fast] : [FIXTURE_GATEWAYS.fast]
       await page.goto(sourceUrl('unixfs', fixtures.raw.ref, {}, gateways))
+      if (transport === 'http') {
+        await expect.poll(() => network.httpProvider.events.some(event => event.cid === fixtures.raw.cid &&
+          event.status === 200 && event.sentBytes === network.alternate.byteLength)).toBe(true)
+        network.fast.setMode({ kind: 'correct' })
+      }
       if (transport === 'bitswap') {
         // Inject corruption into the first retrieval only: non-strict gateway
         // results are not cached, so subsequent media reads rediscover providers.
@@ -148,9 +176,13 @@ for (const transport of ['http', 'bitswap'] as const) {
 test.describe('provider and configured gateway share an authority', () => {
   test.use({ directTransport: 'http', httpProviderAsGateway: true })
   test('hostname equality cannot exempt the actual provider branch', async ({ page, galleryFixtures: fixtures, network, expectedPolicy }) => {
+    network.fast.setMode({ kind: '429', retryAfter: '1' })
     network.httpProvider.setBlockMode(fixtures.raw.cid, { kind: 'response', status: 200, body: network.alternate, headers: { 'content-type': 'application/vnd.ipld.raw' } })
     const evidence = await observeSwGalleryBlocks(page, fixtures.blocks, expectedPolicy)
     await page.goto(sourceUrl('unixfs', fixtures.raw.ref, {}, [SW_GALLERY_HTTP_PROVIDER]))
+    await expect.poll(() => network.httpProvider.events.some(event => event.cid === fixtures.raw.cid &&
+      event.status === 200 && event.sentBytes === network.alternate.byteLength)).toBe(true)
+    network.fast.setMode({ kind: 'correct' })
     await expectReaderImage(page, fixtures.raw.bytes)
     await openReaderTools(page)
     await expectDownloadBytes(page, ui.readerTools(page), fixtures.raw.bytes, downloadName(expectedPolicy.trustless))
@@ -169,19 +201,7 @@ for (const realm of ['service-worker', 'dedicated-worker'] as const) {
       ? { serviceWorkerBuildDir: async ({ oppositeBuildDir }, use) => { await use(oppositeBuildDir) } }
       : { dedicatedWorkerBuildDir: async ({ oppositeBuildDir }, use) => { await use(oppositeBuildDir) } })
     test('the actual opposite-mode realm fails closed before content retrieval', async ({ page, galleryFixtures: fixtures, network, oppositeBuildDir }) => {
-      await page.addInitScript(() => {
-        const errors: string[] = []
-        Reflect.set(window, 'swGalleryTerminalErrors', errors)
-        const NativeWorker = Worker
-        window.Worker = class extends NativeWorker {
-          constructor(url: string | URL, options?: WorkerOptions) {
-            super(url, options)
-            this.addEventListener('message', event => {
-              if (event.data?.type === 'error' && typeof event.data.error?.code === 'string') errors.push(event.data.error.code)
-            })
-          }
-        }
-      })
+      await page.addInitScript(recordWorkerTerminalErrors)
       await page.goto(sourceUrl('unixfs', fixtures.raw.ref))
       await expect(page.getByRole('alert')).toBeVisible()
       expect(await page.evaluate(() => Reflect.get(window, 'swGalleryTerminalErrors'))).toContain('INVALID_INPUT')

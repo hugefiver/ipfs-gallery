@@ -128,9 +128,10 @@ export function parseRequest(value: unknown, normalizers: Normalizers): WorkerRe
       shape(value, ['type', 'sessionId', 'requestId', 'targetRequestId'])
       if (!validIdentity(value.targetRequestId) || value.targetRequestId === value.requestId) invalidInput()
       return { type: 'cancel', ...ids, targetRequestId: value.targetRequestId }
+    case 'release-session':
     case 'dispose':
       shape(value, ['type', 'sessionId', 'requestId'])
-      return { type: 'dispose', ...ids }
+      return { type: value.type, ...ids }
     default:
       return invalidInput()
   }

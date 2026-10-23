@@ -26,6 +26,9 @@ export class WindowBlockSource {
   private openingDebt?: OwnerDebt
   private disposed = false
   private nextId = 0
+  private maintainSequence = 0
+  private maintenance?: Promise<void>
+  private contentSeen = false
   private readonly work = new Map<number, Work>()
   private gateways: GatewayStat[] = []
   private readonly changed = () => {
@@ -34,7 +37,7 @@ export class WindowBlockSource {
     this.dispose()
   }
   constructor(private readonly sessionId: string, private readonly config: SessionConfig,
-    private readonly env: WindowSourceEnvironment, readonly ownership = new WindowOwnership()) {
+    private readonly env: WindowSourceEnvironment, readonly ownership = new WindowOwnership(), private readonly roots: string[] = []) {
     env.serviceWorker.addEventListener('controllerchange', this.changed)
   }
   private async controller(): Promise<ServiceWorker> {
@@ -87,7 +90,7 @@ export class WindowBlockSource {
           }
           port1.onmessageerror = () => { clearTimeout(timer); reject(domain('NETWORK')) }
           port1.start()
-          try { controller.postMessage({ v: VERSION, type: 'open', sessionId: this.sessionId, config: this.config,
+          try { controller.postMessage({ v: VERSION, type: 'open', sessionId: this.sessionId, config: this.config, roots: this.roots,
              ownerId: debt.ownerId, attempt: debt.attempt, secret: debt.secret, boot: debt.boot, policy: BUILD_POLICY }, [port2]) }
           catch (error) { clearTimeout(timer); port2.close(); reject(error) }
         })
@@ -180,6 +183,7 @@ export class WindowBlockSource {
       const prepared = await this.control(connection, 'prepare-block', { blockRequestId: work.swId, cid: cid.toV1().toString() })
       exact(prepared, ['ticket'])
       if (!validIdentity(prepared.ticket)) throw domain('INVALID_INPUT')
+      this.contentSeen = true
       work.known = true; work.admission.resolve()
       work.controller.signal.throwIfAborted()
       const headers = new Headers({ [HEADERS.version]: String(VERSION), [HEADERS.bindingId]: connection.bindingId,
@@ -237,6 +241,36 @@ export class WindowBlockSource {
     if (work.connection) await this.cleanup(work, 'cancel-block')
   }
   settled(): Promise<void> { return Promise.all([...this.work.values()].map(work => work.done.promise)).then(() => {}) }
+  hasContentAdmission(): boolean { return this.contentSeen }
+  maintain(): Promise<void> {
+    if (this.disposed || (!this.roots.length && !this.contentSeen)) return Promise.resolve()
+    if (this.maintenance) return this.maintenance
+    const task = (async () => {
+      const connection = await this.connect()
+      if (this.disposed) throw domain('CANCELLED')
+      const sequence = ++this.maintainSequence
+      const value = await serviceMessage(connection.debt.controller, { type: 'maintain',
+        sessionId: connection.sessionId, bindingId: connection.bindingId, epoch: connection.epoch,
+        capability: connection.capability, sequence }, this.env.channel, BOUNDS.maintainMs + BOUNDS.handshakeMs)
+      exact(value, ['sessionId', 'bindingId', 'epoch', 'sequence'])
+      if (value.sessionId !== connection.sessionId || value.bindingId !== connection.bindingId ||
+        value.epoch !== connection.epoch || value.sequence !== sequence) throw domain('INVALID_INPUT')
+    })()
+    this.maintenance = task
+    void task.finally(() => { if (this.maintenance === task) this.maintenance = undefined }).catch(() => {})
+    return task
+  }
+  async drained(): Promise<void> {
+    await this.opening?.catch(() => {})
+    await this.maintenance?.catch(() => {})
+    if (this.connection) await this.closeConnection(this.connection)
+    if (this.openingDebt && !this.ownership.isSettled(this.openingDebt)) {
+      this.ownership.uncertain(this.openingDebt)
+      await this.ownership.recover()
+      if (!this.ownership.isSettled(this.openingDebt)) throw domain('NETWORK')
+    }
+    await this.settled()
+  }
   recover(): Promise<void> { return this.ownership.recover() }
   snapshot(): GatewayStat[] { return this.gateways.map(item => ({ ...item })) }
   private closeConnection(connection: Connection): Promise<void> {

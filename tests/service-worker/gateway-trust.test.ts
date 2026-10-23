@@ -37,7 +37,7 @@ describe('compiled gateway policy and private SW delivery', () => {
     const replacement = new TextEncoder().encode('gateway replacement')
     const fetch = vi.fn<typeof globalThis.fetch>(async input => new URL(input.toString()).hostname === 'router.example'
       ? new Response('{"Providers":[]}', { headers: { 'content-type': 'application/json' } }) : new Response(replacement.slice().buffer))
-    const host = environment(cleanups, async () => bytes, true, undefined, () => createIpfsBlockSourceWithOptions(config, {
+    const host = environment(cleanups, async () => bytes, true, undefined, () => createIpfsBlockSourceWithOptions({ ...config, limits: { ...config.limits, blockTimeoutMs: 300 } }, {
       fetch, router: 'https://router.example', policy: () => undefined, transport: { retrieve: vi.fn(), dispose() {} },
     }))
     let close: (() => void) | undefined
@@ -318,7 +318,7 @@ describe('compiled gateway policy and private SW delivery', () => {
       { ...BUILD_POLICY, defaultGateways: ['https://different.example'] }]) {
       const { port1, port2 } = new MessageChannel()
       const envelope = new Promise<MessageEvent>(resolve => { port1.onmessage = resolve; port1.start() })
-      await result.open({ v: VERSION, type: 'open', sessionId: 'session', config,
+      await result.open({ v: VERSION, type: 'open', sessionId: 'session', config, roots: [],
         ownerId: crypto.randomUUID(), secret: crypto.randomUUID(), attempt: 1, boot: result.epoch, policy }, client, port2)
       expect((await envelope).data).toMatchObject({ ok: false, error: { code: 'INVALID_INPUT' } })
       port1.close()

@@ -12,7 +12,7 @@ import { config, rawBlock, response, signal } from './helpers'
 import { providerRecord } from './provider-helpers'
 
 const sources: VerifiedBlockSource[] = []
-afterEach(() => { for (const source of sources.splice(0)) source.dispose() })
+afterEach(() => { for (const source of sources.splice(0)) source.dispose(); vi.useRealTimers() })
 function broker(fetch: typeof globalThis.fetch) {
   const source = createGatewayBroker(config(['https://gateway.net']), {
     fetch, now: Date.now, random: () => 0, settleOnAbort: true,
@@ -24,7 +24,7 @@ const routing = (records: unknown[]) => new Response(JSON.stringify({ Providers:
   headers: { 'content-type': 'application/json' },
 })
 function ipfs(fetch: typeof globalThis.fetch, retrieve = vi.fn(), gateways = ['https://gateway.net']) {
-  const source = createIpfsBlockSourceWithOptions(config(gateways), {
+  const source = createIpfsBlockSourceWithOptions(config(gateways, { blockTimeoutMs: 4000 }), {
     fetch, router: 'https://router.example', policy: publicProviderAddress,
     transport: { retrieve, dispose() {} },
   })
@@ -85,20 +85,27 @@ describe('compiled configured-gateway policy', () => {
     const block = await rawBlock('provider requested bytes')
     const corrupt = Uint8Array.of(8)
     const fallback = BUILD_POLICY.trustless ? block.bytes : Uint8Array.of(4, 5)
-    let blockCalls = 0
-    const fetch = vi.fn<typeof globalThis.fetch>(async input => {
+    let configuredCalls = 0
+    let providerCalls = 0
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
       if (new URL(input.toString()).hostname === 'router.example') return routing([
         providerRecord(), providerRecord(['/dns4/provider.ipfs.tech/tcp/443/https']),
       ])
-      return response(++blockCalls === 1 ? corrupt : fallback)
+      if (new Headers(init?.headers).get('accept')?.includes('application/octet-stream')) {
+        providerCalls++
+        return response(corrupt)
+      }
+      return ++configuredCalls === 1 ? new Response(null, { status: 502 }) : response(fallback)
     })
     const retrieve = vi.fn(async () => corrupt.slice())
     const source = ipfs(fetch, retrieve, ['https://provider.ipfs.tech'])
     const result = await source.get(block.cid, signal())
     expect(result).toEqual(fallback)
     expect(retrieve).toHaveBeenCalledTimes(1)
-    expect(blockCalls).toBe(2)
-    expect(fetch.mock.calls[1]![0]).toBe(fetch.mock.calls[2]![0])
+    expect(providerCalls).toBe(1)
+    expect(configuredCalls).toBe(2)
+    expect(fetch.mock.calls.filter(([input]) => new URL(input.toString()).hostname === 'provider.ipfs.tech')
+      .every(([input]) => input === `https://provider.ipfs.tech/ipfs/${block.cid}?format=raw`)).toBe(true)
     expect(source.snapshot()[0]?.successes).toBe(1)
     expect(configuredGatewayEvidence(source, block.cid, result)).toEqual(BUILD_POLICY.trustless ? undefined : {
       canonicalCid: block.cid, gateway: 'https://provider.ipfs.tech', byteLength: fallback.byteLength,
@@ -112,25 +119,63 @@ describe('compiled configured-gateway policy', () => {
     let lookups = 0
     const fetch = vi.fn<typeof globalThis.fetch>(async input => {
       if (new URL(input.toString()).hostname === 'router.example') return routing(++lookups === 1 ? [] : [providerRecord()])
-      return response(BUILD_POLICY.trustless ? block.bytes : Uint8Array.of(7))
+      return lookups > 1 ? new Response(null, { status: 404 }) : response(BUILD_POLICY.trustless ? block.bytes : Uint8Array.of(7))
     })
     const retrieve = vi.fn(async () => block.bytes.slice())
     const source = ipfs(fetch, retrieve)
     const first = await source.get(block.cid, signal())
     expect(first).toEqual(BUILD_POLICY.trustless ? block.bytes : Uint8Array.of(7))
     first.fill(0)
+    if (!BUILD_POLICY.trustless) {
+      vi.useFakeTimers()
+      await vi.advanceTimersByTimeAsync(16_000)
+      await source.maintain!([block.cid], signal())
+    }
     expect(await source.get(block.cid, signal())).toEqual(block.bytes)
     expect(await source.get(block.cid, signal())).toEqual(block.bytes)
     expect(lookups).toBe(BUILD_POLICY.trustless ? 1 : 2)
     expect(retrieve).toHaveBeenCalledTimes(BUILD_POLICY.trustless ? 0 : 1)
   })
 
-  it.each(['LIMIT', 'CANCELLED'] as const)('never enters a gateway after provider %s', async code => {
+  it('strictly verifies non-strict gateway health samples without caching their bytes', async () => {
+    if (BUILD_POLICY.trustless) return
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    const block = await rawBlock('non-strict health seed')
+    const exempt = Uint8Array.of(7)
+    let current = exempt
+    let gatewayCalls = 0
+    const fetch = vi.fn<typeof globalThis.fetch>(async input => {
+      if (new URL(input.toString()).hostname === 'router.example') return routing([])
+      gatewayCalls++
+      return response(current)
+    })
+    const source = ipfs(fetch)
+    const first = await source.get(block.cid, signal())
+    expect(first).toEqual(exempt)
+    expect(configuredGatewayEvidence(source, block.cid, first)).toBeDefined()
+    await vi.advanceTimersByTimeAsync(40_000)
+    await source.maintain!([block.cid], signal())
+    expect(source.snapshot()[0]).toMatchObject({ successes: 1, failures: 1 })
+    current = block.bytes
+    await vi.advanceTimersByTimeAsync(60_000)
+    await source.maintain!([block.cid], signal())
+    expect(source.snapshot()[0]).toMatchObject({ successes: 2, failures: 1 })
+    const before = gatewayCalls
+    expect(await source.get(block.cid, signal())).toEqual(block.bytes)
+    expect(await source.get(block.cid, signal())).toEqual(block.bytes)
+    expect(gatewayCalls).toBe(before + 2)
+  })
+
+  it.each(['LIMIT', 'CANCELLED'] as const)('admits no new attempt after provider terminal %s', async code => {
     const block = await rawBlock(code)
-    const fetch = vi.fn<typeof globalThis.fetch>(async () => routing([providerRecord()]))
-    const source = ipfs(fetch, vi.fn(async () => { throw networkError(code, 'terminal') }))
+    const fetch = vi.fn<typeof globalThis.fetch>(async input => new URL(input.toString()).hostname === 'router.example'
+      ? routing([providerRecord()]) : new Response(null, { status: 404 }))
+    const retrieve = vi.fn(async () => { throw networkError(code, 'terminal') })
+    const source = ipfs(fetch, retrieve)
     await expect(source.get(block.cid, signal())).rejects.toMatchObject({ error: { code } })
-    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(retrieve).toHaveBeenCalledOnce()
+    expect(fetch).toHaveBeenCalledTimes(2)
   })
 
   it('rejects unsupported codec/hash and truncated SHA2 before any gateway request', async () => {

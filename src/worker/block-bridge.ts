@@ -3,7 +3,7 @@ import { BUILD_POLICY } from '../shared/build-policy'
 import { GalleryDomainError } from '../shared/errors'
 import type { VerifiedBlockSource } from '../network/types'
 import { parseBlockCid, verifyBlock } from '../network/verify'
-import { BOUNDS, canonicalCid, domain, exact, galleryError, matchingBuildPolicy, noPorts, sessionConfig, stats, VERSION } from '../service-worker/protocol'
+import { BOUNDS, canonicalCid, domain, exact, galleryError, matchingBuildPolicy, noPorts, sessionConfig, sessionRoots, stats, VERSION } from '../service-worker/protocol'
 import { PortRpc, reject, reply } from '../service-worker/rpc'
 import { latch, WindowOwnership } from '../service-worker/ownership'
 import { applicationBase, WindowBlockSource, type WindowSourceEnvironment } from '../service-worker/window-source'
@@ -12,13 +12,16 @@ import { record, validIdentity } from './protocol'
 export const BRIDGE_OPEN = 'ipfs-gallery-block-bridge'
 export const BRIDGE_FAULT = 'ipfs-gallery-block-bridge-fault'
 export function createBridgedBlockSource(config: SessionConfig, sessionId: string,
-  post: (value: unknown, transfer: Transferable[]) => void): VerifiedBlockSource {
+  post: (value: unknown, transfer: Transferable[]) => void, roots: string[] = []): VerifiedBlockSource {
   let rpc: PortRpc | undefined
   let opening: Promise<PortRpc> | undefined
   let faulted = false
+  let closing: Promise<void> | undefined
+  let rejectedBeforeAdmission = false
+  let cleanlyClosed = false
   const work = new Set<ReturnType<typeof latch>>()
   function fault(): void {
-    if (faulted || work.size === 0) return
+    if (faulted || cleanlyClosed) return
     faulted = true
     post({ type: BRIDGE_FAULT, v: VERSION, sessionId }, [])
   }
@@ -37,7 +40,12 @@ export function createBridgedBlockSource(config: SessionConfig, sessionId: strin
           const value: unknown = event.data
           exact(value, record(value) && value.ok === true ? ['v', 'sequence', 'ok', 'value'] : ['v', 'sequence', 'ok', 'error'])
           if (value.v !== VERSION || value.sequence !== 0 || typeof value.ok !== 'boolean') throw domain('INVALID_INPUT')
-          if (!value.ok) throw new GalleryDomainError(galleryError(value.error))
+          if (!value.ok) {
+            const error = galleryError(value.error)
+            // A negative Window bridge-open reply is sent only before it owns a SW source.
+            rejectedBeforeAdmission = true
+            throw new GalleryDomainError(error)
+          }
           exact(value.value, ['sessionId', 'policy'])
           if (value.value.sessionId !== sessionId) throw domain('INVALID_INPUT')
           matchingBuildPolicy(value.value.policy)
@@ -47,7 +55,7 @@ export function createBridgedBlockSource(config: SessionConfig, sessionId: strin
         } catch (error) { fail(error) }
       }
       port1.start()
-      try { post({ type: BRIDGE_OPEN, v: VERSION, sessionId, config, policy: BUILD_POLICY }, [port2]) }
+      try { post({ type: BRIDGE_OPEN, v: VERSION, sessionId, config, roots, policy: BUILD_POLICY }, [port2]) }
       catch (error) { port2.close(); fail(error) }
     })
     return opening
@@ -56,6 +64,7 @@ export function createBridgedBlockSource(config: SessionConfig, sessionId: strin
   let nextId = 0
   let disposed = false
   let gateways: GatewayStat[] = []
+  if (roots.length) void connect().catch(() => { if (!rejectedBeforeAdmission) fault() })
   return {
     async get(text, signal) {
       signal.throwIfAborted()
@@ -75,7 +84,7 @@ export function createBridgedBlockSource(config: SessionConfig, sessionId: strin
         connection = await connect()
         if (disposed || signal.aborted) throw domain('CANCELLED')
       } catch (error) {
-        // No block demand was sent; a port announcement alone cannot admit SW work.
+        if (!rpc && !rejectedBeforeAdmission) fault()
         finish(task)
         throw error
       }
@@ -109,20 +118,17 @@ export function createBridgedBlockSource(config: SessionConfig, sessionId: strin
         throw error
       } finally { signal.removeEventListener('abort', abort) }
     },
-    settled: () => Promise.all([...work].map(task => task.promise)).then(() => {}),
+    settled: () => Promise.all([...work].map(task => task.promise).concat(opening ? [opening.then(() => {}, error => { if (!rejectedBeforeAdmission) throw error })] : [])).then(() => {}),
+    drained: () => closing ?? Promise.resolve(),
     snapshot: () => gateways.map(value => ({ ...value })),
     dispose() {
       if (disposed) return
       disposed = true
       const tasks = [...work]
-      const close = (connection: PortRpc) => {
-        void connection.request({ type: 'close', sessionId }, config.limits.blockTimeoutMs + BOUNDS.handshakeMs)
-          .then(() => { for (const task of tasks) finish(task) }, fault)
-          .finally(() => connection.close()).catch(() => {})
-      }
-      if (rpc) close(rpc)
-      // Failed initialization is reported by get and has admitted no remote work to drain.
-      else if (opening) void opening.then(close, () => {})
+      const close = (connection: PortRpc) => connection.request({ type: 'close', sessionId }, config.limits.blockTimeoutMs + BOUNDS.handshakeMs)
+        .then(() => { cleanlyClosed = true; for (const task of tasks) finish(task) }).finally(() => connection.close())
+      closing = rpc ? close(rpc) : opening ? opening.then(close, error => { if (!rejectedBeforeAdmission) throw error }) : Promise.resolve()
+      void closing.catch(fault)
     },
   }
 }
@@ -141,24 +147,28 @@ interface RelayTask {
 /** Relay reservations survive private-port closure and are released only by positive remote proof. */
 export function attachWindowBlockBridge(value: unknown, port: MessagePort,
   environment: () => WindowSourceEnvironment = browserEnvironment, onClose: () => void = () => {},
-  relay = { count: 0, bytes: 0 }, ownership = new WindowOwnership()): () => void {
-  exact(value, ['type', 'v', 'sessionId', 'config', 'policy'])
+  relay = { count: 0, bytes: 0 }, ownership = new WindowOwnership()): (() => void) & { maintain(): Promise<void>; retire(): void } {
+  exact(value, ['type', 'v', 'sessionId', 'config', 'roots', 'policy'])
   if (value.type !== BRIDGE_OPEN || value.v !== VERSION || !validIdentity(value.sessionId)) throw domain('INVALID_INPUT')
   matchingBuildPolicy(value.policy)
   const config = sessionConfig(value.config)
+  const roots = sessionRoots(value.roots, config)
   const sessionId = value.sessionId
+  let leaseUntil = roots.length ? Date.now() + BOUNDS.leaseMs : 0
   const tasks = new Map<number, RelayTask>()
   let source: WindowBlockSource | undefined
   let sequence = 0
   let lastBlock = 0
   let controls = 0
   let closed = false
+  let retired = false
+  let activeContent = roots.length > 0
   let idle: ReturnType<typeof setTimeout> | undefined
   let retiring: Promise<void> | undefined
   function armIdle(): void {
     clearTimeout(idle)
     if (!closed) idle = setTimeout(() => {
-      if (tasks.size || controls) { armIdle(); return }
+      if (tasks.size || controls || leaseUntil > Date.now()) { armIdle(); return }
       if (!source || ownership.quarantined) return
       const old = source
       const retirement = old.retireIdle().then(() => { if (source === old) source = undefined })
@@ -188,6 +198,7 @@ export function attachWindowBlockBridge(value: unknown, port: MessagePort,
     const id = message.blockRequestId as number
     if (closed) throw domain('CANCELLED')
     if (message.type === 'get') {
+      if (retired) throw domain('CANCELLED')
       if (id <= lastBlock) throw domain('INVALID_INPUT')
       lastBlock = id
       if (tasks.size >= BOUNDS.perBinding || relay.count >= BOUNDS.perBinding
@@ -207,7 +218,7 @@ export function attachWindowBlockBridge(value: unknown, port: MessagePort,
         task.controller.signal.throwIfAborted()
         if (closed) throw domain('CANCELLED')
         if (ownership.quarantined) throw domain('NETWORK')
-        source ??= new WindowBlockSource(sessionId, config, environment(), ownership)
+        source ??= new WindowBlockSource(sessionId, config, environment(), ownership, roots)
         task.source = source
         const result = task.source.get(id, message.cid as string, task.controller.signal)
         task.remote = task.source.settled()
@@ -216,6 +227,7 @@ export function attachWindowBlockBridge(value: unknown, port: MessagePort,
         return { value: { sessionId, blockRequestId: id, cid: message.cid, byteLength: bytes.byteLength,
           bytes, gateways: task.source.snapshot(), policy: BUILD_POLICY }, transfer: [bytes] }
       } finally {
+        activeContent ||= task.source?.hasContentAdmission() ?? false
         task.local.resolve()
         void Promise.all([task.local.promise, task.remote]).then(() => release(id)).catch(() => {})
       }
@@ -223,7 +235,10 @@ export function attachWindowBlockBridge(value: unknown, port: MessagePort,
     if (message.type === 'close') {
       const pending = [...tasks.values()]
       for (const task of pending) task.controller.abort(domain('CANCELLED'))
+      leaseUntil = 0
       source?.dispose()
+      await source?.drained()
+      await retiring
       await Promise.all(pending.map(task => Promise.all([task.local.promise, task.remote])))
       return { value: null }
     }
@@ -268,5 +283,15 @@ export function attachWindowBlockBridge(value: unknown, port: MessagePort,
   port.onmessageerror = () => { ownership.retire(); dispose() }
   port.start(); armIdle()
   reply(port, 0, { sessionId, policy: BUILD_POLICY })
-  return dispose
+  return Object.assign(dispose, { retire() {
+    retired = true; leaseUntil = 0
+    source?.dispose()
+  }, async maintain() {
+    if (closed || retired || !activeContent || ownership.quarantined) return
+    leaseUntil = Date.now() + BOUNDS.leaseMs
+    if (retiring) await retiring
+    if (closed) return
+    source ??= new WindowBlockSource(sessionId, config, environment(), ownership, roots)
+    await source.maintain()
+  } })
 }

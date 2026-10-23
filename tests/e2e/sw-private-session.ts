@@ -29,15 +29,15 @@ export async function exerciseSwPrivateSession(page: Page, cid: string, gateways
           const timer = setTimeout(() => reject(new Error('Real SW management exchange timed out')), 10_000)
           port1.onmessage = event => { clearTimeout(timer); resolve(event.data) }
           port1.start()
-          controller.postMessage({ ...message, v: 1 }, [port2])
+          controller.postMessage({ ...message, v: 2 }, [port2])
         })
         return await result
       } finally { port1.close(); port2.close() }
     }
     const identity = await management({ type: 'identify' })
     if (!identity.ok || !identity.value) throw new Error('Real SW identity was not returned')
-    const open = { v: 1, type: 'open', sessionId: crypto.randomUUID(), ownerId: crypto.randomUUID(), secret: crypto.randomUUID(),
-      attempt: 1, boot: identity.value.boot, policy, config: { gateways, limits } }
+    const open = { v: 2, type: 'open', sessionId: crypto.randomUUID(), ownerId: crypto.randomUUID(), secret: crypto.randomUUID(),
+      attempt: 1, boot: identity.value.boot, policy, roots: [], config: { gateways, limits } }
     const modeOpen = await management({ ...open, config: { ...open.config, trustless: !policy.trustless } })
     const mismatchOpen = await management({ ...open, policy: { ...policy, trustless: !policy.trustless } })
     const closeErrors: string[] = []
@@ -54,7 +54,7 @@ export async function exerciseSwPrivateSession(page: Page, cid: string, gateways
         const binding = admitted.value
         let sequence = 0
         const rpc = (type: string, fields: Record<string, unknown> = {}) => exchange(port1, {
-          v: 1, type, sequence: ++sequence, sessionId: request.sessionId, bindingId: binding.bindingId, epoch: binding.epoch, ...fields,
+          v: 2, type, sequence: ++sequence, sessionId: request.sessionId, bindingId: binding.bindingId, epoch: binding.epoch, ...fields,
         })
         return { binding, rpc, close: async () => {
           try { const closed = await rpc('close'); if (!closed.ok) closeErrors.push(closed.error?.code ?? 'Missing close acknowledgement') }
@@ -64,7 +64,7 @@ export async function exerciseSwPrivateSession(page: Page, cid: string, gateways
     }
     const fetchTicket = (binding: Record<string, unknown>, ticket: unknown) => fetch(new URL(`${blockPath}${cid}`, location.href), {
       method: 'GET', mode: 'same-origin', credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer', cache: 'no-store', headers: {
-        [headers.version]: '1', [headers.bindingId]: String(binding.bindingId), [headers.epoch]: String(binding.epoch),
+        [headers.version]: '2', [headers.bindingId]: String(binding.bindingId), [headers.epoch]: String(binding.epoch),
         [headers.capability]: String(binding.capability), [headers.blockRequestId]: '1', [headers.ticket]: String(ticket),
       },
     })

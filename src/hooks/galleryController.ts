@@ -71,7 +71,8 @@ export class GalleryController {
     this.update({ sessionId: '', status: 'error', error: toGalleryError(error), gateways: [] })
   }
   private cancelCurrent(): void {
-    if (this.requestId && this.snapshot.status === 'loading') void this.client.cancel({ type: 'cancel', sessionId: this.snapshot.sessionId, requestId: this.nextId(), targetRequestId: this.requestId }).catch(() => {})
+    if (this.snapshot.sessionId) void this.client.releaseSession({ type: 'release-session',
+      sessionId: this.snapshot.sessionId, requestId: this.nextId() }).catch(() => {})
     this.requestId = ''
   }
   cancel(): void {

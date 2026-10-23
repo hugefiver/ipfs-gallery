@@ -33,14 +33,17 @@ const address = `/dns4/provider.ipfs.tech/tcp/443/wss/p2p/${peer}`
 const sources: ReturnType<typeof createIpfsBlockSourceWithOptions>[] = []
 beforeEach(() => { vi.resetAllMocks() })
 afterEach(async () => {
-  for (const source of sources.splice(0)) { source.dispose(); await source.settled().catch(() => {}) }
+  for (const source of sources.splice(0)) { source.dispose(); await source.drained?.().catch(() => {}) }
   expect(directBudget.snapshot()).toMatchObject({ dials: 0, connections: 0, peers: 0 })
 })
 const turn = () => new Promise<void>(resolve => setImmediate(resolve))
-function makeSource(bytes: Uint8Array) {
-  const fetch = vi.fn<typeof globalThis.fetch>(async input => new URL(input.toString()).hostname === 'delegated-ipfs.dev'
-    ? new Response(JSON.stringify({ Providers: [providerRecord([address])] }), { headers: { 'content-type': 'application/json' } })
-    : response(bytes))
+function makeSource(bytes: Uint8Array, fallback = false) {
+  const fetch = vi.fn<typeof globalThis.fetch>(async input => {
+    const host = new URL(input.toString()).hostname
+    if (host === 'delegated-ipfs.dev') return new Response(JSON.stringify({ Providers: [providerRecord([address])] }), { headers: { 'content-type': 'application/json' } })
+    if (host === 'a.gateway.net') await new Promise(resolve => setTimeout(resolve, 1))
+    return fallback && host === 'b.gateway.net' ? response(bytes) : new Response(null, { status: 404 })
+  })
   const source = createIpfsBlockSourceWithOptions(config(), { fetch, router: 'https://delegated-ipfs.dev', policy: publicProviderAddress })
   sources.push(source)
   return { source, fetch }
@@ -133,7 +136,7 @@ describe('operation and connection lifecycle ownership', () => {
     void readB.catch(() => {})
     try {
       await vi.waitFor(() => expect(state.start).toHaveBeenCalledOnce())
-      expect(fetch).toHaveBeenCalledTimes(2)
+      expect(fetch.mock.calls.filter(([input]) => new URL(input.toString()).hostname === 'delegated-ipfs.dev')).toHaveLength(2)
       controller.abort()
       await turn()
       expect(state.stop).not.toHaveBeenCalled()
@@ -145,6 +148,9 @@ describe('operation and connection lifecycle ownership', () => {
       resultB.resolve(b.bytes)
       expect(await readB).toEqual(b.bytes)
       await source.settled()
+      expect(state.stop).not.toHaveBeenCalled()
+      source.dispose()
+      await source.drained!()
       expect(state.stop).toHaveBeenCalledOnce()
       expect(directBudget.snapshot()).toMatchObject({ dials: 0, connections: 0, peers: 0 })
     } finally { starting.resolve(); resultB.resolve(b.bytes); source.dispose(); await Promise.allSettled([readA, readB]) }
@@ -158,7 +164,7 @@ describe('operation and connection lifecycle ownership', () => {
       void state.transport!.dial(target, options).catch(() => {})
       return Promise.reject(new Error('upper queue rejected'))
     })
-    const { source, fetch } = makeSource(block.bytes)
+    const { source, fetch } = makeSource(block.bytes, true)
     const result = source.get(block.cid, new AbortController().signal)
     let finished = false
     void result.then(() => { finished = true }, () => { finished = true })
@@ -168,14 +174,14 @@ describe('operation and connection lifecycle ownership', () => {
       let cleaned = false
       void barrier.then(() => { cleaned = true }, () => { cleaned = true })
       await turn()
-      expect(fetch).toHaveBeenCalledTimes(1)
+      expect(fetch.mock.calls.some(([input]) => new URL(input.toString()).hostname === 'b.gateway.net')).toBe(false)
       expect(finished).toBe(false)
       expect(cleaned).toBe(false)
       expect(directBudget.snapshot()).toMatchObject({ dials: 1, connections: 1 })
       lower.reject(new Error('physical dial cleanup exited'))
       expect(await result).toEqual(block.bytes)
       await barrier
-      expect(fetch).toHaveBeenCalledTimes(2)
+      expect(fetch.mock.calls.some(([input]) => new URL(input.toString()).hostname === 'b.gateway.net')).toBe(true)
     } finally { lower.reject(new Error('test cleanup')); await result.catch(() => {}) }
   })
 

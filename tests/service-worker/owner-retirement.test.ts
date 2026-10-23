@@ -10,7 +10,7 @@ afterEach(async () => { for (const dispose of cleanup.splice(0).reverse()) await
 async function message(runtime: ReturnType<typeof createServiceWorkerRuntime>, value: Record<string, unknown>, sender: WindowIdentity) {
   const { port1, port2 } = new MessageChannel()
   const response = new Promise<MessageEvent>(resolve => { port1.onmessage = resolve; port1.start() })
-  const body = { ...value, v: VERSION, ...(value.type === 'open' ? { policy: BUILD_POLICY } : {}) }
+  const body = { ...value, v: VERSION, ...(value.type === 'open' ? { policy: BUILD_POLICY, roots: [] } : {}) }
   if (value.type === 'open') await runtime.open(body, sender, port2)
   else await runtime.manage(body, sender, port2)
   const result = (await response).data

@@ -4,7 +4,7 @@ import { cancelResponseBody, createReaderCancellation } from './direct-reader'
 /** The returned promise owns the fetch and reader until both actually exit. */
 export async function fetchBounded(
   fetch: typeof globalThis.fetch, url: string, accept: string, maxBytes: number, signal: AbortSignal,
-  consume?: (chunk: Uint8Array, response: Response) => boolean,
+  consume?: (chunk: Uint8Array, response: Response) => boolean, oversize?: () => unknown,
 ): Promise<Uint8Array> {
   checkSignal(signal)
   const response = await fetch(url, {
@@ -16,6 +16,11 @@ export async function fetchBounded(
     checkSignal(signal)
     throw networkError(response.status === 404 ? 'NOT_FOUND' : 'NETWORK', '服务未返回受支持的响应。')
   }
+  const rejectOversize = async () => {
+    await cancelResponseBody(response)
+    checkSignal(signal)
+    throw oversize?.() ?? networkError('NETWORK', '候选响应超过字节上限。')
+  }
   let headerBytes = 0
   let headerCount = 0
   for (const [name, value] of response.headers) {
@@ -24,7 +29,8 @@ export async function fetchBounded(
   }
   if (signal.aborted || response.redirected || !response.ok || response.type === 'opaqueredirect' || response.type === 'opaque') return reject()
   const declared = response.headers.get('content-length')
-  if (declared !== null && (!/^\d+$/.test(declared) || !Number.isSafeInteger(Number(declared)) || Number(declared) > maxBytes)) return reject()
+  if (declared !== null && (!/^\d+$/.test(declared) || !Number.isSafeInteger(Number(declared)))) return reject()
+  if (declared !== null && Number(declared) > maxBytes) return rejectOversize()
   const contentType = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase()
   if (contentType && !accept.split(',').map(value => value.trim()).includes(contentType)) return reject()
   if (!response.body) return new Uint8Array()
@@ -48,7 +54,7 @@ export async function fetchBounded(
       checkSignal(signal)
       if (done) { complete = true; break }
       total += value.byteLength
-      if (total > maxBytes) throw networkError('NETWORK', '候选响应超过字节上限。')
+      if (total > maxBytes) throw oversize?.() ?? networkError('NETWORK', '候选响应超过字节上限。')
       if (consume) {
         if (!consume(value, response)) break
       } else {

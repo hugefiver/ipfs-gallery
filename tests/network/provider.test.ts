@@ -47,7 +47,7 @@ describe('provider address policy', () => {
     expect(parseProvider({ ...providerRecord(), Schema: 'bitswap' })).toBeUndefined()
     expect(parseProvider({ ...providerRecord(), ID: 'https://attacker.net' })).toBeUndefined()
     expect(parseProvider({ ...providerRecord(), Protocols: ['transport-unknown'] })).toBeUndefined()
-    expect(parseProvider(providerRecord(Array(5).fill('/dns4/provider.ipfs.tech/tcp/443/wss')))).toBeUndefined()
+    expect(parseProvider(providerRecord(Array(5).fill('/dns4/provider.ipfs.tech/tcp/443/wss')))?.addresses).toHaveLength(1)
     expect(parseProvider({ ...providerRecord(), Error: 'x'.repeat(PROVIDER_LIMITS.recordBytes) })).toBeUndefined()
     const other = peerIdFromString(CID.createV1(0x72, identity.digest(Uint8Array.from([8, 1, 18, 32, ...new Uint8Array(32).fill(2)]))).toString())
     expect(parseProvider(providerRecord([`/dns4/provider.ipfs.tech/tcp/443/wss/p2p/${other}`]))).toBeUndefined()
@@ -55,6 +55,26 @@ describe('provider address policy', () => {
 })
 
 describe('bounded delegated routing HTTP', () => {
+  it.each([undefined, []])('admits unknown protocols at low confidence: %j', Protocols => {
+    const provider = parseProvider({ ...providerRecord(), Protocols })
+    expect(provider?.unknownProtocols).toBe(true)
+    expect(provider?.addresses).toHaveLength(1)
+  })
+  it.each([null, 'transport-bitswap', {}, [1]])('rejects malformed protocol metadata: %j', Protocols => {
+    expect(parseProvider({ ...providerRecord(), Protocols })).toBeUndefined()
+  })
+  it('filters unsafe and duplicate addresses before the four-safe-address cap', () => {
+    const Addrs = ['/ip4/127.0.0.1/tcp/443/wss', ...Array(5).fill('/dns4/provider.ipfs.tech/tcp/443/wss'),
+      ...Array.from({ length: 5 }, (_, i) => `/dns4/p${i}.ipfs.tech/tcp/443/https`)]
+    expect(parseProvider({ ...providerRecord(Addrs), Protocols: [] })?.addresses).toHaveLength(4)
+  })
+  it.each(['application/json', 'application/x-ndjson'])('scans past invalid and duplicate records in %s', async type => {
+    const block = await rawBlock('later valid provider')
+    const records = [...Array(20).fill({ Schema: 'other' }), ...Array(20).fill(providerRecord())]
+    const payload = type === 'application/json' ? JSON.stringify({ Providers: records }) : records.map(value => JSON.stringify(value)).join('\n')
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(payload, { headers: { 'content-type': type } }))
+    expect(await findProviders(CID.parse(block.cid), signal(), routingOptions(fetch))).toHaveLength(1)
+  })
   it.each(['application/json', 'application/x-ndjson'])('reads %s and uses only the provider GET API', async type => {
     const block = await rawBlock('routing')
     const payload = type === 'application/json' ? JSON.stringify({ extra: 'plain data', Providers: [providerRecord()] }) : JSON.stringify(providerRecord()) + '\n'
@@ -67,14 +87,22 @@ describe('bounded delegated routing HTTP', () => {
     }))
   })
 
-  it('bounds NDJSON records while streaming and cancels at sixteen records', async () => {
+  it('merges safe transport addresses from duplicate peer records without consuming another provider slot', async () => {
+    const block = await rawBlock('duplicate peer transports')
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(JSON.stringify({ Providers: [providerRecord(),
+      providerRecord(['/dns4/provider.ipfs.tech/tcp/443/https'])] }), { headers: { 'content-type': 'application/json' } }))
+    const providers = await findProviders(CID.parse(block.cid), signal(), routingOptions(fetch))
+    expect(providers).toHaveLength(1)
+    expect(providers[0]!.addresses.map(address => address.kind)).toEqual(['wss', 'https'])
+  })
+  it('bounds raw NDJSON scanning independently of unique provider capacity', async () => {
     let cancelled = false
     const block = await rawBlock('cap')
     const line = new TextEncoder().encode(JSON.stringify(providerRecord()) + '\n')
     const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(new ReadableStream({
       pull(controller) { controller.enqueue(line) }, cancel() { cancelled = true },
     }), { headers: { 'content-type': 'application/x-ndjson' } }))
-    expect(await findProviders(CID.parse(block.cid), signal(), routingOptions(fetch))).toHaveLength(16)
+    expect(await findProviders(CID.parse(block.cid), signal(), routingOptions(fetch))).toHaveLength(1)
     expect(cancelled).toBe(true)
   })
 

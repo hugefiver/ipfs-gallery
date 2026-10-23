@@ -129,6 +129,7 @@ export type WorkerRequest =
     }
   | { type: 'asset'; sessionId: string; requestId: string; ref: ContentRef }
   | { type: 'cancel'; sessionId: string; requestId: string; targetRequestId: string }
+  | { type: 'release-session'; sessionId: string; requestId: string }
   | { type: 'dispose'; sessionId: string; requestId: string }
 
 export type WorkerResponse =
@@ -150,7 +151,7 @@ export type WorkerResponse =
       type: 'result'
       sessionId: string
       requestId: string
-      op: 'cancel' | 'dispose'
+      op: 'cancel' | 'release-session' | 'dispose'
       value: null
     }
   | { type: 'error'; sessionId: string; requestId: string; error: GalleryError }
@@ -173,6 +174,7 @@ export interface GalleryClient {
   discover(request: Extract<WorkerRequest, { type: 'discover' }>): Promise<GalleryResult>
   loadAsset(request: Extract<WorkerRequest, { type: 'asset' }>): Promise<VerifiedAsset>
   cancel(request: Extract<WorkerRequest, { type: 'cancel' }>): Promise<void>
+  releaseSession(request: Extract<WorkerRequest, { type: 'release-session' }>): Promise<void>
   dispose(request: Extract<WorkerRequest, { type: 'dispose' }>): Promise<void>
   subscribe(
     listener: (event: Extract<WorkerResponse, { type: 'progress' | 'telemetry' }>) => void,

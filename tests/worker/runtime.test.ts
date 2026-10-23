@@ -102,7 +102,7 @@ describe('Worker runtime', () => {
     test.runtime.handleMessage(request)
     await vi.waitFor(() => expect(test.terminal('discover')).toHaveLength(1))
     expect(test.dependencies.discover).toHaveBeenCalledWith({ source: { kind: 'cids', refs: [ref], browse: false } }, expect.anything(), expect.anything())
-    expect(test.dependencies.createBroker).toHaveBeenCalledWith(expect.objectContaining({ gateways: ['https://gateway.example'] }), 'session')
+    expect(test.dependencies.createBroker).toHaveBeenCalledWith(expect.objectContaining({ gateways: ['https://gateway.example'] }), 'session', [ref.cid])
     const excessive = discover('raised', 'raised-session')
     excessive.config.limits.maxAssetConcurrency = 4
     test.runtime.handleMessage(excessive)
@@ -382,7 +382,7 @@ describe('Worker runtime', () => {
     test.runtime.handleMessage(discover())
     test.runtime.handleMessage({ type: 'dispose', sessionId: 'session', requestId: 'dispose' })
     expect(test.terminal('discover')[0]).toMatchObject({ type: 'error', error: { code: 'CANCELLED' } })
-    expect(test.terminal('dispose')[0]).toMatchObject({ type: 'result', op: 'dispose', value: null })
+    await vi.waitFor(() => expect(test.terminal('dispose')[0]).toMatchObject({ type: 'result', op: 'dispose', value: null }))
     expect(test.brokers[0]!.dispose).toHaveBeenCalledTimes(1)
     test.runtime.handleMessage(load('closed'))
     expect(test.terminal('closed')[0]).toMatchObject({ type: 'error', error: { code: 'CANCELLED' } })

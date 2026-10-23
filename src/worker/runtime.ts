@@ -12,11 +12,12 @@ import type { ContentReader, DiscoveryOptions, GalleryProgress, OperationOptions
 import type { VerifiedBlockSource } from '../network/types'
 import { GalleryDomainError, toGalleryError } from '../shared/errors'
 import { DEFAULT_LIMITS } from '../shared/limits'
+import { parseBlockCid } from '../network/verify'
 import { identity, MAX_PENDING_REQUESTS, MAX_REQUEST_IDS, parseRequest, type Normalizers } from './protocol'
 
 export interface RuntimeDependencies extends Normalizers {
   postMessage(message: WorkerResponse, transfer?: Transferable[]): void
-  createBroker(config: SessionConfig, sessionId: string): VerifiedBlockSource
+  createBroker(config: SessionConfig, sessionId: string, roots: string[]): VerifiedBlockSource
   createReader(source: VerifiedBlockSource, options: { maxInputBytes: number }): ContentReader
   discover(input: GalleryInput, reader: ContentReader, options: DiscoveryOptions): Promise<GalleryResult>
   /** Returns an exact-length, exclusively owned buffer, never a broker/cache buffer. */
@@ -94,23 +95,33 @@ export class GalleryWorkerRuntime {
       return
     }
     this.seen.add(request.requestId)
-    if (request.type === 'dispose') {
-      this.closed = true
-      this.cancelSession()
-      this.dependencies.postMessage({ type: 'result', ...identity(request), op: 'dispose', value: null })
+    if (request.type === 'dispose' || request.type === 'release-session') {
+      if (request.type === 'dispose') this.closed = true
+      const source = this.session?.id === request.sessionId || request.type === 'dispose' ? this.session?.broker : undefined
+      if (source) this.cancelSession()
+      void Promise.resolve(source?.drained?.()).then(() => {
+        this.dependencies.postMessage({ type: 'result', ...identity(request), op: request.type, value: null })
+      }, error => this.reject(request, toGalleryError(error)))
       return
     }
     if (request.type === 'cancel') {
       const target = this.operations.get(request.targetRequestId)
-      if (target?.request.sessionId === request.sessionId) this.stop(target, cancelled())
+      if (target?.request.sessionId === request.sessionId) {
+        if (target.request.type === 'discover') this.cancelSession()
+        else this.stop(target, cancelled())
+      }
       this.dependencies.postMessage({ type: 'result', ...identity(request), op: 'cancel', value: null })
       return
     }
     if (request.type === 'discover') {
       this.cancelSession()
       try {
+        const source = request.input.source
+        const refs = source.kind === 'cids' ? source.refs : [source.ref]
+        const roots = [...new Set(refs.map(ref => parseBlockCid(ref.cid, request.config.limits.maxBlockBytes))
+          .filter(cid => cid.multihash.code !== 0).map(cid => cid.toV1().toString()))]
         this.session = { id: request.sessionId, config: request.config,
-          broker: this.dependencies.createBroker(request.config, request.sessionId) }
+          broker: this.dependencies.createBroker(request.config, request.sessionId, roots) }
       } catch (error) {
         this.reject(request, toGalleryError(error))
         return

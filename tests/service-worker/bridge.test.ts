@@ -147,6 +147,40 @@ describe('Window / Dedicated Worker private bridge', () => {
       redirect: 'error', referrerPolicy: 'no-referrer', cache: 'no-store' })
     expect(host.runtime().usage()).toMatchObject({ consumers: 0, flights: 0 })
   })
+  it('starts bounded maintenance after an empty-root bridge admits its first nonidentity block', async () => {
+    const { bytes, cid } = await block('identity manifest child')
+    const get = vi.fn(async () => bytes)
+    const maintain = vi.fn(async () => {})
+    const host = environment(cleanups, get, true, undefined, () => ({
+      get, snapshot: () => [], dispose() {}, maintain,
+    }))
+    let close: ReturnType<typeof attachWindowBlockBridge> | undefined
+    const source = createBridgedBlockSource(config, 'session', (value, ports) => {
+      close = attachWindowBlockBridge(value, ports[0] as MessagePort, () => host.env)
+    })
+    cleanups.push(() => { source.dispose(); close?.() })
+    expect(await source.get(cid, new AbortController().signal)).toEqual(bytes)
+    await source.settled!()
+    await close!.maintain()
+    expect(maintain).toHaveBeenCalledWith([], expect.any(AbortSignal))
+  })
+  it('keeps empty-root maintenance active after an admitted nonidentity block fails', async () => {
+    const { cid } = await block('temporarily unavailable child')
+    const get = vi.fn(async () => { throw domain('NETWORK') })
+    const maintain = vi.fn(async () => {})
+    const host = environment(cleanups, get, true, undefined, () => ({
+      get, snapshot: () => [], dispose() {}, maintain,
+    }))
+    let close: ReturnType<typeof attachWindowBlockBridge> | undefined
+    const source = createBridgedBlockSource(config, 'session', (value, ports) => {
+      close = attachWindowBlockBridge(value, ports[0] as MessagePort, () => host.env)
+    })
+    cleanups.push(() => { source.dispose(); close?.() })
+    await expect(source.get(cid, new AbortController().signal)).rejects.toMatchObject({ error: { code: 'NETWORK' } })
+    await source.settled!()
+    await close!.maintain()
+    expect(maintain).toHaveBeenCalledWith([], expect.any(AbortSignal))
+  })
   it('resolves large identity CIDs locally without Window registration or fetch', async () => {
     const bytes = new Uint8Array(1000).fill(42)
     const cid = CID.createV1(0x55, identity.digest(bytes)).toString()

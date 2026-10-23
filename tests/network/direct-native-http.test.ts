@@ -62,6 +62,8 @@ async function setup(phase: 'provider' | 'gateway', settings: { holdB?: boolean;
       return response
     },
   })
+  // Warm discovery so the provider body, not an immediately successful cold gateway, is exercised.
+  if (phase === 'provider') await source.maintain!([a.cid], new AbortController().signal)
   const finish = (cid: string) => held.get(cid)?.end(blocks.get(cid)!.subarray(1))
   return { source, a, b, c, base, evidence, held, ready, deliver, finish, async close() {
     deliver.resolve()
@@ -98,6 +100,7 @@ describe('native HTTP terminal body errors', () => {
     let readB: Promise<Uint8Array> | undefined
     try {
       await fixture.evidence.get(fixture.a.cid)!.pending.promise
+      const settledA = fixture.source.settled()
       readB = fixture.source.get(fixture.b.cid, new AbortController().signal)
       void readB.catch(() => {})
       await fixture.evidence.get(fixture.b.cid)!.pending.promise
@@ -107,6 +110,8 @@ describe('native HTTP terminal body errors', () => {
       expect(evidence.readError).toBeDefined()
       expect(evidence.cancelError).toBe(evidence.readError)
       expect(error).toMatchObject({ error: { code: 'CANCELLED' } })
+      await settledA
+      expect(fixture.held.get(fixture.b.cid)!.writableEnded).toBe(false)
       fixture.finish(fixture.b.cid)
       expect(await readB).toEqual(fixture.b.bytes)
       await fixture.source.settled()
@@ -114,8 +119,8 @@ describe('native HTTP terminal body errors', () => {
     } finally { await fixture.close(); await Promise.allSettled([readA, readB]) }
   })
 
-  it('uses gateway fallback after the direct deadline aborts a pending native body', async () => {
-    const fixture = await setup('provider')
+  it('uses gateway fallback after the candidate deadline aborts a pending native body', async () => {
+    const fixture = await setup('provider', { gatewayTimeoutMs: 100 })
     const readA = fixture.source.get(fixture.a.cid, new AbortController().signal)
     void readA.catch(() => {})
     try {
@@ -128,7 +133,7 @@ describe('native HTTP terminal body errors', () => {
       await fixture.source.settled()
       expect(await fixture.source.get(fixture.c.cid, new AbortController().signal)).toEqual(fixture.c.bytes)
     } finally { await fixture.close(); await readA.catch(() => {}) }
-  }, 15000)
+  })
 
   it('preserves a strict gateway timeout and tries the remaining gateway', async () => {
     const fixture = await setup('gateway', { gatewayTimeoutMs: 100 })

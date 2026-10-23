@@ -4,7 +4,7 @@ import { multiaddr, type Multiaddr } from '@multiformats/multiaddr'
 import { normalizeGateway } from './gateways'
 
 export interface ProviderAddress { kind: 'wss' | 'https'; address: Multiaddr; url?: string }
-export interface ProviderCandidate { id: PeerId; addresses: ProviderAddress[] }
+export interface ProviderCandidate { id: PeerId; addresses: ProviderAddress[]; unknownProtocols?: boolean }
 export type ProviderAddressPolicy = (address: Multiaddr, peer: PeerId) => ProviderAddress | undefined
 
 /** DNS resolution belongs to the browser; this does not prevent DNS rebinding. */

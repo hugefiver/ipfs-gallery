@@ -9,7 +9,7 @@ export function latch() {
 
 /** One bounded exchange on a new port; a timeout is never settlement evidence. */
 export function serviceMessage(controller: ServiceWorker, value: Record<string, unknown>,
-  channel: () => MessageChannel, timeout = BOUNDS.handshakeMs): Promise<unknown> {
+  channel: () => MessageChannel, timeout: number = BOUNDS.handshakeMs): Promise<unknown> {
   const { port1, port2 } = channel()
   return new Promise((resolve, reject) => {
     const finish = () => { clearTimeout(timer); port1.close() }
@@ -57,6 +57,11 @@ export class WindowOwnership {
   isSettled(debt: OwnerDebt): boolean { return !this.debts.has(debt) }
   begin(controller: ServiceWorker, boot: string, channel: () => MessageChannel): OwnerDebt {
     if (this.quarantined) throw domain('NETWORK')
+    const replaced = [...this.debts].filter(debt => debt.controller !== controller || debt.boot !== boot)
+    if (replaced.length) {
+      for (const debt of replaced) this.uncertain(debt)
+      throw domain('NETWORK')
+    }
     if (this.debts.size >= BOUNDS.bindings || this.attempt >= Number.MAX_SAFE_INTEGER) throw domain('LIMIT')
     const debt: OwnerDebt = { ownerId: this.ownerId, secret: this.secret, attempt: ++this.attempt,
       controller, boot, channel, done: latch(), listeners: new Set(), uncertain: false }

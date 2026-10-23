@@ -15,7 +15,7 @@ it('wires the production Dedicated Worker source to the private Window bridge wi
   vi.stubGlobal('addEventListener', vi.fn())
   await import('../../src/worker/gallery.worker')
   const config = { gateways: [...DEFAULT_GATEWAYS], limits: { ...DEFAULT_LIMITS } }
-  const source = capture.dependencies!.createBroker(config, 'actual-session')
-  expect(capture.bridge).toHaveBeenCalledWith(config, 'actual-session', expect.any(Function))
+  const source = capture.dependencies!.createBroker(config, 'actual-session', [])
+  expect(capture.bridge).toHaveBeenCalledWith(config, 'actual-session', expect.any(Function), [])
   expect(source).toBe(capture.bridge.mock.results[0]!.value)
 })

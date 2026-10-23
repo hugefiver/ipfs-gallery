@@ -1,5 +1,6 @@
 import { CID } from 'multiformats/cid'
 import { identity } from 'multiformats/hashes/identity'
+import { DEFAULT_GATEWAYS } from '../../src/shared/gateways'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createIpfsBlockSource, createIpfsBlockSourceWithOptions } from '../../src/network/ipfs-source'
 import { publicProviderAddress } from '../../src/network/provider-policy'
@@ -12,7 +13,7 @@ import { providerRecord } from './provider-helpers'
 
 const sources: VerifiedBlockSource[] = []
 afterEach(() => { for (const source of sources.splice(0)) source.dispose(); vi.useRealTimers() })
-function source(fetch: typeof globalThis.fetch, retrieve = vi.fn(), settings = config()) {
+function source(fetch: typeof globalThis.fetch, retrieve = vi.fn(), settings = config(undefined, { blockTimeoutMs: 1500, gatewayTimeoutMs: 1000 })) {
   const result = createIpfsBlockSourceWithOptions(settings, {
     fetch, router: 'https://delegated-ipfs.dev', policy: publicProviderAddress, transport: { retrieve, dispose() {} },
   })
@@ -22,7 +23,7 @@ function source(fetch: typeof globalThis.fetch, retrieve = vi.fn(), settings = c
 const routing = (records: unknown[]) => new Response(JSON.stringify({ Providers: records }), { headers: { 'content-type': 'application/json' } })
 const httpsProvider = () => providerRecord(['/dns4/provider.ipfs.tech/tcp/443/https'])
 
-describe('IPFS direct then explicit fallback source', () => {
+describe('IPFS adaptive verified source pool', () => {
   it('resolves identity locally without even querying the router', async () => {
     const bytes = new Uint8Array(1024).fill(7)
     const fetch = vi.fn<typeof globalThis.fetch>()
@@ -38,17 +39,18 @@ describe('IPFS direct then explicit fallback source', () => {
     result.dispose()
   })
 
-  it('prioritizes explicit WSS and serves verified cache hits without another lookup', async () => {
+  it('admits routed WSS into the shared pool and serves verified cache hits without network', async () => {
     const block = await rawBlock('direct')
-    const fetch = vi.fn<typeof globalThis.fetch>(async () => routing([httpsProvider(), providerRecord()]))
+    const fetch = vi.fn<typeof globalThis.fetch>(async input => new URL(input.toString()).hostname === 'delegated-ipfs.dev'
+      ? routing([providerRecord()]) : new Response(null, { status: 404 }))
     const retrieve = vi.fn(async () => block.bytes.slice())
     const result = source(fetch, retrieve)
     expect(await result.get(block.cid, signal())).toEqual(block.bytes)
-    expect(fetch).toHaveBeenCalledTimes(1)
     expect(retrieve).toHaveBeenCalledTimes(1)
     expect(result.snapshot().every(stat => stat.successes === 0 && stat.failures === 0)).toBe(true)
+    const count = fetch.mock.calls.length
     await result.get(block.cid, signal())
-    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(fetch).toHaveBeenCalledTimes(count)
   })
 
   it('honors the injected byte LRU cap and isolates returned buffers', async () => {
@@ -71,7 +73,7 @@ describe('IPFS direct then explicit fallback source', () => {
     await result.get(blocks[0]!.cid, signal())
     expect(fetch).toHaveBeenCalledTimes(6)
     await result.get(blocks[1]!.cid, signal())
-    expect(fetch).toHaveBeenCalledTimes(8)
+    expect(fetch).toHaveBeenCalledTimes(7)
   })
 
   it('respects a zero cache cap and partitions different bindings', async () => {
@@ -97,14 +99,19 @@ describe('IPFS direct then explicit fallback source', () => {
       if (new URL(input.toString()).hostname === 'delegated-ipfs.dev') return routing([httpsProvider()])
       return corrupt ? response(Uint8Array.of(8)) : response(block.bytes)
     })
+    vi.useFakeTimers()
     const result = source(fetch)
-    await expect(result.get(block.cid, signal())).rejects.toMatchObject({ error: { code: 'INTEGRITY' } })
+    const failed = expect(result.get(block.cid, signal())).rejects.toMatchObject({ error: { code: 'INTEGRITY' } })
+    await vi.advanceTimersByTimeAsync(1501)
+    await failed
     corrupt = false
+    await vi.advanceTimersByTimeAsync(60_000)
+    const retry = result.get(block.cid, signal())
+    await vi.advanceTimersByTimeAsync(100)
+    expect(await retry).toEqual(block.bytes)
     const before = fetch.mock.calls.length
     expect(await result.get(block.cid, signal())).toEqual(block.bytes)
-    expect(fetch).toHaveBeenCalledTimes(before + 2)
-    expect(await result.get(block.cid, signal())).toEqual(block.bytes)
-    expect(fetch).toHaveBeenCalledTimes(before + 2)
+    expect(fetch).toHaveBeenCalledTimes(before)
   })
 
   it('charges source cache hits to each reader operation input budget', async () => {
@@ -117,20 +124,23 @@ describe('IPFS direct then explicit fallback source', () => {
     expect(await reader.stat(ref, signal())).toEqual({ kind: 'file', size: BigInt(block.bytes.byteLength) })
     expect(await collectBytes(reader.read(ref, { signal: signal(), maxBytes: block.bytes.byteLength }))).toEqual(block.bytes)
     await expect(reader.stat(ref, signal())).rejects.toMatchObject({ error: { code: 'LIMIT' } })
-    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(fetch.mock.calls.filter(([input]) => new URL(input.toString()).hostname === 'delegated-ipfs.dev')).toHaveLength(1)
     expect(retrieve).toHaveBeenCalledTimes(1)
   })
 
-  it('tries provider HTTPS after a candidate protocol restriction, with no gateway requests', async () => {
+  it('admits provider HTTPS without requiring a WSS attempt first', async () => {
     const block = await rawBlock('provider HTTP')
     const calls: string[] = []
     const fetch = vi.fn<typeof globalThis.fetch>(async input => {
       calls.push(input.toString())
-      return calls.length === 1 ? routing([providerRecord(), httpsProvider()]) : response(block.bytes)
+      const host = new URL(input.toString()).hostname
+      return host === 'delegated-ipfs.dev' ? routing([providerRecord(), httpsProvider()])
+        : host === 'provider.ipfs.tech' ? response(block.bytes) : new Response(null, { status: 404 })
     })
     const retrieve = vi.fn(async () => { throw networkError('NETWORK', 'candidate protocol cap') })
     expect(await source(fetch, retrieve).get(block.cid, signal())).toEqual(block.bytes)
-    expect(calls).toEqual([`https://delegated-ipfs.dev/routing/v1/providers/${block.cid}`, `https://provider.ipfs.tech/ipfs/${block.cid}?format=raw`])
+    expect(calls).toContain(`https://provider.ipfs.tech/ipfs/${block.cid}?format=raw`)
+    expect(retrieve).not.toHaveBeenCalled()
   })
 
   it('validates HTTP provider bytes then invokes only configured gateway fallback', async () => {
@@ -138,14 +148,15 @@ describe('IPFS direct then explicit fallback source', () => {
     const fetch = vi.fn<typeof globalThis.fetch>(async input => {
       const host = new URL(input.toString()).hostname
       if (host === 'delegated-ipfs.dev') return routing([httpsProvider()])
+      if (host === 'a.gateway.net') { await new Promise(resolve => setTimeout(resolve, 10)); return new Response(null, { status: 404 }) }
       return response(host === 'provider.ipfs.tech' ? Uint8Array.of(1) : block.bytes)
     })
     const result = source(fetch)
     expect(await result.get(block.cid, signal())).toEqual(block.bytes)
-    expect(fetch).toHaveBeenCalledTimes(3)
-    expect(result.snapshot()).toMatchObject([{ url: 'https://a.gateway.net', successes: 1 }, { url: 'https://b.gateway.net', successes: 0 }])
+    expect(fetch).toHaveBeenCalledTimes(4)
+    expect(result.snapshot()).toMatchObject([{ url: 'https://a.gateway.net', successes: 0 }, { url: 'https://b.gateway.net', successes: 1 }])
     expect(await result.get(block.cid, signal())).toEqual(block.bytes)
-    expect(fetch).toHaveBeenCalledTimes(3)
+    expect(fetch).toHaveBeenCalledTimes(4)
   })
 
   it('accepts a verified 4 MiB raw HTTP block without a Bitswap-only size restriction', async () => {
@@ -167,10 +178,11 @@ describe('IPFS direct then explicit fallback source', () => {
 
   it.each(['LIMIT', 'CANCELLED', 'INVALID_INPUT'] as const)('does not fall back after %s', async code => {
     const block = await rawBlock(code)
-    const fetch = vi.fn<typeof globalThis.fetch>(async () => routing([providerRecord(), httpsProvider()]))
+    const fetch = vi.fn<typeof globalThis.fetch>(async input => new URL(input.toString()).hostname === 'delegated-ipfs.dev'
+      ? routing([providerRecord()]) : new Response(null, { status: 404 }))
     const retrieve = vi.fn(async () => { throw networkError(code, 'terminal') })
     await expect(source(fetch, retrieve).get(block.cid, signal())).rejects.toMatchObject({ error: { code } })
-    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(retrieve).toHaveBeenCalledTimes(1)
   })
 
   it('retains its binding slot until cancelled direct work actually exits', async () => {
@@ -185,26 +197,67 @@ describe('IPFS direct then explicit fallback source', () => {
     await vi.waitFor(() => expect(retrieve).toHaveBeenCalledTimes(1))
     controller.abort()
     await expect(result.get(block.cid, signal())).rejects.toMatchObject({ error: { code: 'LIMIT' } })
-    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(fetch).toHaveBeenCalledTimes(2)
     pending.resolve(block.bytes)
     await rejected
     expect(await result.get(block.cid, signal())).toEqual(block.bytes)
     expect(fetch).toHaveBeenCalledTimes(2)
   })
 
-  it('waits for direct cancellation cleanup before entering the remaining-deadline gateway stage', async () => {
+  it('starts a soft hedge without aborting the slow primary, then waits for loser cleanup', async () => {
     vi.useFakeTimers()
-    const block = await rawBlock('phase timeout')
-    const pending = deferred<Uint8Array>()
-    const fetch = vi.fn<typeof globalThis.fetch>(async input => new URL(input.toString()).hostname === 'delegated-ipfs.dev' ? routing([providerRecord()]) : response(block.bytes))
-    const retrieve = vi.fn(() => pending.promise)
-    const result = source(fetch, retrieve)
-    const operation = result.get(block.cid, signal())
-    await vi.advanceTimersByTimeAsync(10001)
-    expect(fetch).toHaveBeenCalledTimes(1)
-    pending.reject(networkError('TIMEOUT', 'direct done'))
+    const block = await rawBlock('soft hedge')
+    const cleanup = deferred<void>()
+    let primary: AbortSignal | undefined
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      if (new URL(input.toString()).hostname === 'delegated-ipfs.dev') return routing([providerRecord()])
+      primary = init!.signal!
+      return new Response(new ReadableStream({ cancel: () => cleanup.promise }))
+    })
+    const retrieve = vi.fn(async () => block.bytes)
+    const result = source(fetch, retrieve, config(undefined, { blockTimeoutMs: 10_000, gatewayTimeoutMs: 10_000 }))
+    let settled = false
+    const operation = result.get(block.cid, signal()).then(bytes => { settled = true; return bytes })
+    await vi.advanceTimersByTimeAsync(2399)
+    expect(primary!.aborted).toBe(false)
+    expect(retrieve).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(101)
+    expect(retrieve).toHaveBeenCalledOnce()
+    expect(primary!.aborted).toBe(true)
+    expect(settled).toBe(false)
+    expect(result.snapshot()[0]?.inFlight).toBe(1)
+    cleanup.resolve()
     expect(await operation).toEqual(block.bytes)
-    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(result.snapshot()[0]).toMatchObject({ inFlight: 0, failures: 0 })
+  })
+
+  it('reads a slow verified block from the third default gateway after provider and gateway timeouts', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    const block = await rawBlock('slow third gateway')
+    const settings = config([...DEFAULT_GATEWAYS])
+    const attempts: { host: string; at: number }[] = []
+    const cancelled: string[] = []
+    const fetch = vi.fn<typeof globalThis.fetch>(async input => {
+      const host = new URL(input.toString()).hostname
+      attempts.push({ host, at: Date.now() })
+      if (host === 'delegated-ipfs.dev') return routing([httpsProvider()])
+      if (host === 'apac.orbitor.dev') {
+        await new Promise(resolve => setTimeout(resolve, 15_000))
+        return response(block.bytes)
+      }
+      return new Response(new ReadableStream<Uint8Array>({ cancel() { cancelled.push(host) } }))
+    })
+    const result = source(fetch, vi.fn(), settings)
+    const operation = result.get(block.cid, signal())
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(await operation).toEqual(block.bytes)
+    expect(attempts.some(attempt => attempt.host === 'ipfs.filebase.io' && attempt.at === 0)).toBe(true)
+    const third = attempts.find(attempt => attempt.host === 'apac.orbitor.dev')!
+    expect(third.at).toBeLessThan(70_000)
+    expect(cancelled).toContain('ipfs.filebase.io')
+    expect(result.snapshot().find(stat => stat.url === 'https://apac.orbitor.dev')).toMatchObject({ successes: 1, inFlight: 0 })
+    expect(result.snapshot().every(stat => stat.inFlight === 0)).toBe(true)
   })
 
   it('strict fallback keeps the slot and telemetry until aborted fetch settles', async () => {
@@ -224,18 +277,20 @@ describe('IPFS direct then explicit fallback source', () => {
     expect(result.snapshot()[0]?.inFlight).toBe(0)
   })
 
-  it('does not enter fallback when direct cleanup exhausts the outer deadline', async () => {
+  it('does not admit new attempts after cleanup reaches the original outer deadline', async () => {
     vi.useFakeTimers()
     const block = await rawBlock('outer deadline')
     const pending = deferred<Uint8Array>()
     const fetch = vi.fn<typeof globalThis.fetch>(async () => routing([providerRecord()]))
-    const result = source(fetch, vi.fn(() => pending.promise))
+    const settings = config()
+    const result = source(fetch, vi.fn(() => pending.promise), settings)
     const operation = result.get(block.cid, signal())
     const rejected = expect(operation).rejects.toMatchObject({ error: { code: 'TIMEOUT' } })
-    await vi.advanceTimersByTimeAsync(30001)
+    await vi.advanceTimersByTimeAsync(settings.limits.blockTimeoutMs + 1)
+    const count = fetch.mock.calls.length
     pending.reject(networkError('TIMEOUT', 'cleanup complete'))
     await rejected
-    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(fetch).toHaveBeenCalledTimes(count)
   })
 
   it('dispose initiates cancellation synchronously but preserves real cleanup ownership', async () => {
@@ -264,13 +319,15 @@ describe('IPFS direct then explicit fallback source', () => {
 
   it('isolates cleanup failure without fallback, caching or a successful barrier', async () => {
     const block = await rawBlock('cleanup failure')
-    const fetch = vi.fn<typeof globalThis.fetch>(async () => routing([providerRecord(), httpsProvider()]))
+    const fetch = vi.fn<typeof globalThis.fetch>(async input => new URL(input.toString()).hostname === 'delegated-ipfs.dev'
+      ? routing([providerRecord()]) : new Response(null, { status: 404 }))
     const retrieve = vi.fn(async () => { throw new DirectCleanupError() })
     const result = source(fetch, retrieve)
     await expect(result.get(block.cid, signal())).rejects.toBeInstanceOf(DirectCleanupError)
     await expect(result.settled()).rejects.toBeInstanceOf(DirectCleanupError)
+    const count = fetch.mock.calls.length
     await expect(result.get(block.cid, signal())).rejects.toBeInstanceOf(DirectCleanupError)
-    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(fetch).toHaveBeenCalledTimes(count)
   })
 
   it('waits for every captured operation before rejecting a failed cleanup barrier', async () => {

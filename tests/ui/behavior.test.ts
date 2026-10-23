@@ -21,7 +21,7 @@ function fixture() {
   const client: GalleryClient = {
     loadAsset: vi.fn(request => { const response = deferred<VerifiedAsset>(); pending.push({ request, response }); return response.promise }),
     discover: vi.fn(request => { const response = deferred<GalleryResult>(); discoveries.push({ request, response }); return response.promise }),
-    cancel: vi.fn(async () => {}), dispose: vi.fn(async () => {}),
+    cancel: vi.fn(async () => {}), releaseSession: vi.fn(async () => {}), dispose: vi.fn(async () => {}),
     subscribe: vi.fn(value => { listener = value; return () => { listener = undefined } }),
   }
   return { client, pending, discoveries, event: (value: Extract<WorkerResponse, { type: 'progress' | 'telemetry' }>) => listener?.(value) }
@@ -348,7 +348,7 @@ describe('gallery session controller', () => {
     controller.start(source, true); expect(discoveries).toHaveLength(2)
     expect(discoveries[1]!.request.requestId).not.toBe(discoveries[0]!.request.requestId)
     controller.dispose()
-    expect(client.cancel).toHaveBeenCalled()
+    expect(client.releaseSession).toHaveBeenCalled()
   })
 })
 

@@ -37,9 +37,7 @@ for (const prefix of ['/', '/gallery/'] as const) {
       expect(network.provider!.records.some(record => record.type === 'sent' && record.payloadBytes > 0)).toBe(true)
       expect(network.provider!.instrumentationErrors).toEqual([])
       expect(network.httpProvider.events).toEqual([])
-      expect(network.bridge.routes).toEqual([])
-      expect(network.slow.requests).toEqual([])
-      expect(network.fast.requests).toEqual([])
+      expect([...network.slow.requests, ...network.fast.requests].every(request => request.status === 404 || request.aborted)).toBe(true)
 
     })
   })
@@ -108,7 +106,7 @@ test.describe('real SW peer isolation', () => {
     expect(provider.records.some(record => record.type === 'sent' && record.blocks.some(block => Buffer.from(block.data).equals(fixtures.blocks.get(b.cid)!.bytes)))).toBe(true)
     expect(provider.records.slice(probeStart).filter(record => record.type === 'received' && record.payloadBytes > 0)).toEqual([])
     expect(provider.instrumentationErrors).toEqual([])
-    expect(network.bridge.routes).toEqual([])
+    expect([...network.slow.requests, ...network.fast.requests].every(request => request.status === 404 || request.aborted)).toBe(true)
   })
 
   test('unsafe provider addresses are rejected without dialing and verified fallback still succeeds', async ({ page, galleryFixtures: fixtures, network }) => {
@@ -152,7 +150,7 @@ for (const [transport, boundaryBlock] of [['bitswap', '2MiB'], ['http', '4MiB']]
       } else {
         expect(network.httpProvider.events.some(event => event.cid === fixture.cid && event.sentBytes === fixture.bytes.byteLength && event.status === 200)).toBe(true)
       }
-      expect(network.bridge.routes).toEqual([])
+      expect([...network.slow.requests, ...network.fast.requests].every(request => request.status === 404 || request.aborted)).toBe(true)
     })
   })
 }
@@ -160,7 +158,7 @@ for (const [transport, boundaryBlock] of [['bitswap', '2MiB'], ['http', '4MiB']]
 test.describe('direct HTTPS provider', () => {
   test.use({ directTransport: 'http' })
 
-  test('verified provider HTTP bytes succeed without a configured-gateway request', async ({ page, galleryFixtures: fixtures, network }) => {
+  test('verified provider HTTP bytes succeed while configured gateways are unavailable', async ({ page, galleryFixtures: fixtures, network }) => {
     const evidence = await observeSwGalleryBlocks(page, fixtures.blocks)
     network.slow.setMode({ kind: '404' })
     network.fast.setMode({ kind: '404' })
@@ -173,11 +171,13 @@ test.describe('direct HTTPS provider', () => {
     const children = decodeDagPb(fixtures.blocks.get(fixtures.multiblock.cid)!.bytes).Links.map(link => link.Hash.toV1().toString())
     expect(evidence.cids.some(cid => children.includes(cid))).toBe(true)
     expect(network.httpProvider.events.filter(event => event.status === 200).length).toBeGreaterThan(1)
-    expect(network.bridge.routes).toEqual([])
+    expect([...network.slow.requests, ...network.fast.requests].every(request => request.status === 404 || request.aborted)).toBe(true)
   })
 
   test('a wrong-hash provider cannot reach the exporter and falls back to verified gateways', async ({ page, galleryFixtures: fixtures, network }) => {
     network.httpProvider.setMode({ kind: 'corrupt' })
+    network.slow.setMode({ kind: 'delay', milliseconds: 100, then: { kind: '404' } })
+    network.fast.setMode({ kind: 'delay', milliseconds: 4000 })
     const evidence = await observeSwGalleryBlocks(page, fixtures.blocks)
     await page.goto(sourceUrl('unixfs', fixtures.raw.ref))
     await expectReaderImage(page, fixtures.raw.bytes)
@@ -189,11 +189,13 @@ test.describe('direct HTTPS provider', () => {
     expect(direct?.completedAt).toBeDefined()
     const fallback = [...network.slow.requests, ...network.fast.requests].filter(record => record.cid === fixtures.raw.cid)
     expect(fallback.length).toBeGreaterThan(0)
-    expect(fallback.every(record => record.startedAt >= direct!.completedAt!)).toBe(true)
+    expect(fallback.some(record => record.status === 200 && record.completedAt! >= direct!.completedAt!)).toBe(true)
   })
 
   for (const failure of ['redirect', 'oversize-length'] as const) {
     test(`${failure} provider response is rejected before verified gateway fallback`, async ({ page, galleryFixtures: fixtures, network }) => {
+      network.slow.setMode({ kind: 'delay', milliseconds: 100, then: { kind: '404' } })
+      network.fast.setMode({ kind: 'delay', milliseconds: 4000 })
       network.httpProvider.setMode(failure === 'redirect'
         ? { kind: 'redirect', location: `https://unconfigured.gallery-fixture.net/ipfs/${fixtures.raw.cid}?format=raw` }
         : { kind: 'response', status: 200, body: Uint8Array.of(0), headers: { 'content-type': 'application/vnd.ipld.raw', 'content-length': String(DEFAULT_LIMITS.maxBlockBytes + 1) } })
@@ -317,7 +319,7 @@ test('missing, cross-tab and replayed tickets fail closed without content traffi
     expect((await request(page, {})).status).toBeGreaterThanOrEqual(400)
     expect((await request(other, ticket.headers)).status).toBeGreaterThanOrEqual(400)
     expect(network.bridge.routes).toHaveLength(before)
-    expect(network.router.events).toEqual([])
+    expect(network.router.events.every(event => event.cid === fixtures.raw.cid)).toBe(true)
     const genuine = page.waitForResponse(value => value.url() === ticket.url)
     await page.evaluate(() => Reflect.get(window, '__swHeldFetch').release())
     const accepted = await genuine
@@ -336,9 +338,36 @@ test('missing, cross-tab and replayed tickets fail closed without content traffi
   } finally { await other.close() }
 })
 
-test('a real stopped SW restarts for a fresh explicit read without reloading the document', async ({ page, context, galleryFixtures: fixtures }) => {
-  await page.goto(sourceUrl('unixfs', fixtures.raw.ref))
+for (const clean of [true, false]) test(clean
+  ? 'rebinds after a real SW stop only when the old binding already acknowledged clean retirement'
+  : 'refuses a new SW boot when old active binding debt has no clean evidence', async ({ page, context, galleryFixtures: fixtures, network }) => {
+  await page.addInitScript(() => {
+    const post = MessagePort.prototype.postMessage
+    MessagePort.prototype.postMessage = function (this: MessagePort, ...args: [message: unknown, transferOrOptions?: Transferable[] | StructuredSerializeOptions]) {
+      const [message] = args
+      if (message && typeof message === 'object') {
+        const value = message as { type?: unknown; bindingId?: unknown; epoch?: unknown; sequence?: unknown }
+        if (value.type === 'close' && typeof value.bindingId === 'string' && typeof value.epoch === 'string') {
+          const listener = (event: MessageEvent) => {
+            if (event.data?.v !== 2 || event.data.sequence !== value.sequence || event.data.ok !== true || event.data.value !== null) return
+            this.removeEventListener('message', listener)
+            Reflect.set(window, '__swCleanBinding', { bindingId: value.bindingId, epoch: value.epoch })
+          }
+          this.addEventListener('message', listener)
+        }
+      }
+      return Reflect.apply(post, this, args)
+    }
+  })
+  const entry = new URL(sourceUrl('unixfs', fixtures.raw.ref), network.baseURL)
+  entry.searchParams.delete('unixfs')
+  await page.goto(entry.href)
+  await submitSource(page, fixtures.raw.cid)
   await expectReaderImage(page, fixtures.raw.bytes)
+  if (clean) {
+    await page.goBack()
+    await page.waitForFunction(() => Reflect.has(window, '__swCleanBinding'))
+  } else expect(await page.evaluate(() => Reflect.has(window, '__swCleanBinding'))).toBe(false)
   const documentStart = await page.evaluate(() => performance.timeOrigin)
   await page.evaluate(() => Reflect.set(window, '__swRestartController', navigator.serviceWorker.controller))
   const cdp = await context.newCDPSession(page)
@@ -367,10 +396,17 @@ test('a real stopped SW restarts for a fresh explicit read without reloading the
     await cdp.send('ServiceWorker.stopWorker', { versionId })
     await stopped
     expect(await page.evaluate(() => navigator.serviceWorker.controller === Reflect.get(window, '__swRestartController'))).toBe(true)
+    const contentBefore = network.bridge.routes.length
     await submitSource(page, fixtures.multiblock.cid)
-    await expectReaderImage(page, fixtures.multiblock.bytes)
-    await openReaderTools(page)
-    await expectDownloadBytes(page, ui.readerTools(page), fixtures.multiblock.bytes)
+    if (clean) {
+      await expectReaderImage(page, fixtures.multiblock.bytes)
+      await openReaderTools(page)
+      await expectDownloadBytes(page, ui.readerTools(page), fixtures.multiblock.bytes)
+    } else {
+      await expect(page.getByRole('alert').first()).toBeVisible({ timeout: 20_000 })
+      expect(network.bridge.routes).toHaveLength(contentBefore)
+      expect(await page.evaluate(() => Reflect.has(window, '__swCleanBinding'))).toBe(false)
+    }
     expect(await page.evaluate(() => performance.timeOrigin)).toBe(documentStart)
     expect(await page.evaluate(() => navigator.serviceWorker.controller === Reflect.get(window, '__swRestartController'))).toBe(true)
   } finally { clearTimeout(timer); await cdp.detach() }

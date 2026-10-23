@@ -5,14 +5,14 @@ import { normalizeGateway } from '../network/gateways'
 import { parseBlockCid } from '../network/verify'
 import { invalidInput, parseSessionConfig, record, validIdentity } from '../worker/protocol'
 
-export const VERSION = 1
+export const VERSION = 2
 export const SCRIPT = 'ipfs-service-worker.js'
 export const BLOCK_PATH = '__ipfs_gallery__/blocks/'
 export const BOUNDS = Object.freeze({ bindings: 8, flights: 6, consumers: 24, perBinding: 6,
   owners: 8, management: 4,
   responses: 6, responseBytes: 24 * 1024 * 1024, workingBytes: 64 * 1024 * 1024,
   cachePerBinding: 2 * 1024 * 1024, ticketMs: 5000, bodyMs: 10_000, idleMs: 60_000,
-  handshakeMs: 10_000, controls: 16 })
+  handshakeMs: 10_000, controls: 16, leaseMs: 90_000, heartbeatMs: 20_000, maintainMs: 30_000 })
 export const HEADERS = { version: 'X-Ipfs-Gallery-Version', bindingId: 'X-Ipfs-Gallery-Binding',
   epoch: 'X-Ipfs-Gallery-Epoch', capability: 'X-Ipfs-Gallery-Capability',
   blockRequestId: 'X-Ipfs-Gallery-Request', ticket: 'X-Ipfs-Gallery-Ticket' } as const
@@ -79,12 +79,19 @@ export function ownerIdentity(value: Record<string, unknown>): OwnerIdentity {
     || !Number.isSafeInteger(value.attempt) || (value.attempt as number) <= 0) throw domain('INVALID_INPUT')
   return { ownerId: value.ownerId, attempt: value.attempt as number, secret: value.secret }
 }
-export interface Open extends Record<string, unknown>, OwnerIdentity { v: 1; type: 'open'; sessionId: string; config: SessionConfig; boot: string }
+export function sessionRoots(value: unknown, config: SessionConfig): string[] {
+  if (!Array.isArray(value) || value.length > config.limits.maxRoots) invalidInput()
+  const roots = value.map(cid => canonicalCid(cid, config.limits.maxBlockBytes))
+  if (new Set(roots).size !== roots.length) invalidInput()
+  return roots
+}
+export interface Open extends Record<string, unknown>, OwnerIdentity { v: 2; type: 'open'; sessionId: string; config: SessionConfig; roots: string[]; boot: string }
 export function parseOpen(value: unknown): Open {
-  exact(value, ['v', 'type', 'sessionId', 'config', 'ownerId', 'attempt', 'secret', 'boot', 'policy'])
+  exact(value, ['v', 'type', 'sessionId', 'config', 'roots', 'ownerId', 'attempt', 'secret', 'boot', 'policy'])
   if (value.v !== VERSION || value.type !== 'open' || !validIdentity(value.sessionId) || !validIdentity(value.boot)) invalidInput()
   matchingBuildPolicy(value.policy)
-  return { v: VERSION, type: 'open', sessionId: value.sessionId, config: sessionConfig(value.config),
+  const config = sessionConfig(value.config)
+  return { v: VERSION, type: 'open', sessionId: value.sessionId, config, roots: sessionRoots(value.roots, config),
     ...ownerIdentity(value), boot: value.boot }
 }
 export function parseControl(value: unknown, identity: BindingIdentity, previous: number): Record<string, unknown> {
